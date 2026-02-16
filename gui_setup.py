@@ -52,7 +52,7 @@ class CorrelationGui(QMainWindow):
         self.canvas.mpl_connect('button_press_event', self.on_mouse_press)
         self.canvas.mpl_connect('button_release_event', self.on_mouse_release)
 
-        # --- INICIO: PANTALLA EN BLANCO ---
+        # --- INICIO: PANTALLA CON INSTRUCCIONES ---
         self.show_placeholder()
 
     def setup_ui(self):
@@ -185,11 +185,30 @@ class CorrelationGui(QMainWindow):
                 elif mode == 'line': self.canvas.setCursor(Qt.CursorShape.CrossCursor)
         except Exception as e: print(e)
 
-    # --- PANTALLA EN BLANCO ---
+    # --- PANTALLA DE INSTRUCCIONES ---
     def show_placeholder(self):
-        """Limpia la gráfica y la deja totalmente blanca."""
+        """Limpia la gráfica y muestra las instrucciones iniciales del software."""
         self.ax.clear()
         self.ax.axis('off') # Ocultar ejes y reglas
+        
+        # Texto de instrucciones
+        texto_instrucciones = (
+            "Bienvenido a Overlay Master\n\n"
+            "Este software correlaciona imágenes de microscopía electrónica (SEM)\n"
+            "con mediciones de corriente EBIC, mapeando la intensidad en cada punto.\n\n"
+            "INSTRUCCIONES DE CARGA:\n"
+            "Por favor, cargue un archivo en formato .tif multipágina que contenga:\n"
+            "  • 1ª Imagen (Frame 0): Imagen de topografía SEM.\n"
+            "  • 2ª Imagen (Frame 1): Mapa de corriente EBIC."
+        )
+        
+        # Añadir el texto en el centro (coordenadas 0.5, 0.5 de los ejes)
+        self.ax.text(0.5, 0.5, texto_instrucciones, 
+                     transform=self.ax.transAxes,
+                     ha='center', va='center', 
+                     fontsize=11, color='#333333',
+                     bbox=dict(boxstyle='round,pad=1.5', facecolor='#f8f9fa', edgecolor='#cccccc'))
+        
         self.ax.set_title("") 
         self.canvas.draw()
 
@@ -198,17 +217,17 @@ class CorrelationGui(QMainWindow):
     def upload_image(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Cargar TIF", "", "TIF Files (*.tif *.tiff)")
         if file_path:
-            # 1. Reset total (pone pantalla blanca y limpia variables)
+            # 1. Reset total (pone pantalla inicial y limpia variables)
             self.reset_entire_state()
             
             # 2. Intentar cargar
             success = self.data_manager.load_file(file_path)
             if success:
                 self.img_height, self.img_width = self.data_manager.sem_data.shape
-                # Si carga bien, inicializamos el plot
+                # Si carga bien, inicializamos el plot (esto borrará las instrucciones)
                 self.initialize_plot()
             else:
-                # Si falla, aseguramos que se vea blanco
+                # Si falla, aseguramos que se vean las instrucciones de nuevo
                 self.show_placeholder()
 
     def reset_entire_state(self):
@@ -244,11 +263,11 @@ class CorrelationGui(QMainWindow):
         self.tool_group.setExclusive(True)
         self.canvas.setCursor(Qt.CursorShape.ArrowCursor)
 
-        # Mostrar pantalla en blanco al resetear
+        # Mostrar pantalla con instrucciones al resetear
         self.show_placeholder()
 
     def initialize_plot(self):
-        # ax.clear() borra cualquier estado anterior
+        # ax.clear() borra cualquier estado anterior (incluyendo el texto de instrucciones)
         self.ax.clear()
         self.ax.axis('on') # Reactivar ejes para la imagen
         
