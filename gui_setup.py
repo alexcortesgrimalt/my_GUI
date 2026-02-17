@@ -364,12 +364,12 @@ class CorrelationGui(QMainWindow):
         y0 = self.img_height - margin_y
         
         # Dibujar la línea verde
-        self.ax.add_line(Line2D([x0, x1], [y0, y0], color='#00FF00', linewidth=2))
+        self.ax.add_line(Line2D([x0, x1], [y0, y0], color='#00FF00', linewidth=1))
         
         # Añadir el texto encima de la línea
         self.ax.text(x0 + self.scale_bar_length_px/2, y0 - (self.img_height*0.02), 
                      self.scale_bar_label, color='#00FF00', fontsize=11, 
-                     fontweight='bold', ha='center', va='bottom')
+                     fontweight='normal', ha='center', va='bottom')
 
     # --- LÓGICA DE GUARDADO ---
     def save_data(self, content_type, file_format):
@@ -427,10 +427,10 @@ class CorrelationGui(QMainWindow):
                     x1 = self.img_width - margin_x
                     y0 = self.img_height - margin_y
                     
-                    temp_ax.add_line(Line2D([x0, x1], [y0, y0], color='#00FF00', linewidth=2))
+                    temp_ax.add_line(Line2D([x0, x1], [y0, y0], color='#00FF00', linewidth=1))
                     temp_ax.text(x0 + self.scale_bar_length_px/2, y0 - (self.img_height*0.02), 
                                  self.scale_bar_label, color='#00FF00', fontsize=16, 
-                                 fontweight='bold', ha='center', va='bottom')
+                                 fontweight='normal', ha='center', va='bottom')
                 
                 temp_fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
                 temp_fig.savefig(file_path, format=file_format, pad_inches=0)
