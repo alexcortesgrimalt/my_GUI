@@ -1,12 +1,13 @@
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QFileDialog, QToolBar, QFrame, QLabel, 
                              QPushButton, QStatusBar, QButtonGroup, QSlider,
-                             QComboBox)
+                             QComboBox, QMenu, QToolButton) # <-- AÑADIDOS QMenu y QToolButton
 from PyQt6.QtGui import QAction
 from PyQt6.QtCore import Qt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
+import matplotlib.image as mpimg # <-- AÑADIDO para guardar imágenes limpias
 import numpy as np
 
 # Importamos el data manager
@@ -61,10 +62,50 @@ class CorrelationGui(QMainWindow):
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
         
+        # --- BOTÓN CARGAR ---
         upload_action = QAction("Cargar .TIF Multi-Frame", self)
         upload_action.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_DialogOpenButton))
         upload_action.triggered.connect(self.upload_image)
         toolbar.addAction(upload_action)
+
+        # --- BOTÓN GUARDAR (NUEVO CON MENÚ DESPLEGABLE) ---
+        save_button = QToolButton()
+        save_button.setText("Guardar Exportar...")
+        save_button.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_DialogSaveButton))
+        save_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        save_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        
+        # Menú principal de guardado
+        save_menu = QMenu()
+
+        # 1. Submenú: Save SEM image
+        menu_sem = QMenu("Save SEM image", self)
+        menu_sem.addAction("as .tif", lambda: self.save_data("sem", "tif"))
+        menu_sem.addAction("as .png", lambda: self.save_data("sem", "png"))
+        save_menu.addMenu(menu_sem)
+
+        # 2. Submenú: Save SEM + Current Map
+        menu_overlay = QMenu("Save SEM + Current Map", self)
+        menu_overlay.addAction("as .tif", lambda: self.save_data("overlay", "tif"))
+        menu_overlay.addAction("as .png", lambda: self.save_data("overlay", "png"))
+        save_menu.addMenu(menu_overlay)
+
+        # 3. Submenú: Save screen (Guarda ejes, zoom, lineas, etc)
+        menu_screen = QMenu("Save screen", self)
+        menu_screen.addAction("as .tif", lambda: self.save_data("screen", "tif"))
+        menu_screen.addAction("as .png", lambda: self.save_data("screen", "png"))
+        save_menu.addMenu(menu_screen)
+
+        save_menu.addSeparator() # Línea separadora visual
+
+        # 4. Acciones directas para CSV
+        save_menu.addAction("Save SEM map (.csv)", lambda: self.save_data("sem", "csv"))
+        save_menu.addAction("Save Current Map (.csv)", lambda: self.save_data("ebic", "csv"))
+
+        # Asignar el menú al botón y añadirlo al toolbar
+        save_button.setMenu(save_menu)
+        toolbar.addWidget(save_button)
+        # ------------------------------------------------
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -217,21 +258,86 @@ class CorrelationGui(QMainWindow):
     def upload_image(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Cargar TIF", "", "TIF Files (*.tif *.tiff)")
         if file_path:
-            # 1. Reset total (pone pantalla inicial y limpia variables)
             self.reset_entire_state()
-            
-            # 2. Intentar cargar
             success = self.data_manager.load_file(file_path)
             if success:
                 self.img_height, self.img_width = self.data_manager.sem_data.shape
-                # Si carga bien, inicializamos el plot (esto borrará las instrucciones)
                 self.initialize_plot()
             else:
-                # Si falla, aseguramos que se vean las instrucciones de nuevo
                 self.show_placeholder()
 
+    # --- LÓGICA DE GUARDADO (NUEVA FUNCIÓN) ---
+    def save_data(self, content_type, file_format):
+        """Gestiona el proceso de guardar imágenes y archivos CSV."""
+        if self.data_manager.sem_data is None:
+            self.status_bar.showMessage("Error: No hay datos cargados para guardar.", 3000)
+            return
+
+        # 1. Abrir diálogo para seleccionar ruta y nombre de archivo
+        filter_str = f"{file_format.upper()} Files (*.{file_format})"
+        file_path, _ = QFileDialog.getSaveFileName(self, f"Guardar como {file_format.upper()}", "", filter_str)
+        
+        if not file_path:
+            return # El usuario canceló
+            
+        # Asegurar extensión
+        if not file_path.lower().endswith(f".{file_format}"):
+            file_path += f".{file_format}"
+
+        try:
+            # Opción 1: CSV del SEM
+            if content_type == "sem" and file_format == "csv":
+                np.savetxt(file_path, self.data_manager.sem_data, delimiter=",")
+            
+            # Opción 2: CSV de la corriente EBIC
+            elif content_type == "ebic" and file_format == "csv":
+                if self.data_manager.current_map is not None:
+                    np.savetxt(file_path, self.data_manager.current_map, delimiter=",")
+                else:
+                    self.status_bar.showMessage("Error: No hay datos EBIC disponibles.", 3000)
+                    return
+
+            # Opción 3: Imagen limpia del SEM (.tif o .png)
+            elif content_type == "sem" and file_format in ["tif", "png"]:
+                mpimg.imsave(file_path, self.data_manager.sem_data, cmap='gray')
+
+            # Opción 4: Screen Completa (Guarda con zoom, líneas, colorbar...)
+            elif content_type == "screen":
+                # bbox_inches='tight' recorta los márgenes blancos sobrantes
+                self.fig.savefig(file_path, format=file_format, bbox_inches='tight')
+
+            # Opción 5: Overlay limpio a resolución original (Sin reglas, sin zoom)
+            elif content_type == "overlay":
+                # Creamos una figura temporal invisible
+                temp_fig = Figure(figsize=(self.img_width/100, self.img_height/100), dpi=100)
+                temp_ax = temp_fig.add_subplot(111)
+                temp_ax.axis('off') # Sin ejes numéricos
+                
+                extent_fixed = [0, self.img_width, self.img_height, 0]
+                
+                # Dibujamos SEM
+                temp_ax.imshow(self.data_manager.sem_data, cmap='gray', aspect='equal', extent=extent_fixed)
+                
+                # Dibujamos EBIC encima si existe
+                if self.data_manager.current_map is not None:
+                    temp_ax.imshow(self.data_manager.current_map, cmap=self.current_cmap, 
+                                   alpha=self.opacity, aspect='equal', extent=extent_fixed,
+                                   vmin=np.nanmin(self.data_manager.current_map), 
+                                   vmax=np.nanmax(self.data_manager.current_map))
+                
+                # Ajustamos márgenes a 0 para que la imagen ocupe todo
+                temp_fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+                temp_fig.savefig(file_path, format=file_format, pad_inches=0)
+
+            self.status_bar.showMessage(f"Guardado exitosamente en: {file_path}", 5000)
+
+        except Exception as e:
+            self.status_bar.showMessage(f"Error al guardar: {str(e)}", 5000)
+            print(f"Excepción al guardar: {e}")
+
+    # --------------------------------------------------------
+
     def reset_entire_state(self):
-        """Limpieza profunda"""
         self.layer_sem = None
         self.layer_ebic = None
         if self.cbar:
@@ -247,7 +353,6 @@ class CorrelationGui(QMainWindow):
         self.opacity = 0.5
         self.show_overlay = False
         
-        # Reset UI
         self.slider_opacity.blockSignals(True)
         self.slider_opacity.setValue(50)
         self.slider_opacity.blockSignals(False)
@@ -263,13 +368,11 @@ class CorrelationGui(QMainWindow):
         self.tool_group.setExclusive(True)
         self.canvas.setCursor(Qt.CursorShape.ArrowCursor)
 
-        # Mostrar pantalla con instrucciones al resetear
         self.show_placeholder()
 
     def initialize_plot(self):
-        # ax.clear() borra cualquier estado anterior (incluyendo el texto de instrucciones)
         self.ax.clear()
-        self.ax.axis('on') # Reactivar ejes para la imagen
+        self.ax.axis('on')
         
         extent_fixed = [0, self.img_width, self.img_height, 0]
 
@@ -306,7 +409,6 @@ class CorrelationGui(QMainWindow):
     # --- ACCIONES ---
 
     def action_home_reset(self):
-        """Reset de vista (zoom y líneas) para la imagen actual."""
         if self.img_width == 0: return 
 
         self.ax.set_xlim(0, self.img_width)
