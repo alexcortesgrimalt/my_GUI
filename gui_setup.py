@@ -35,6 +35,10 @@ class CorrelationGui(QMainWindow):
         self.layer_ebic = None
         self.cbar = None 
         
+        # Datos de la scale bar para exportación
+        self.scale_bar_length_px = None
+        self.scale_bar_label = None
+        
         self.colormaps = ['plasma', 'viridis', 'inferno', 'magma', 'cividis', 'rainbow', 'jet', 'gray']
         self.current_cmap = 'plasma'
 
@@ -66,13 +70,11 @@ class CorrelationGui(QMainWindow):
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
         
-        # --- BOTÓN CARGAR ---
         upload_action = QAction("Cargar .TIF Multi-Frame", self)
         upload_action.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_DialogOpenButton))
         upload_action.triggered.connect(self.upload_image)
         toolbar.addAction(upload_action)
 
-        # --- BOTÓN GUARDAR / EXPORTAR ---
         save_button = QToolButton()
         save_button.setText("Guardar Exportar...")
         save_button.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_DialogSaveButton))
@@ -81,33 +83,27 @@ class CorrelationGui(QMainWindow):
         
         save_menu = QMenu()
         
-        # 1. Submenú: Save SEM image
         menu_sem = QMenu("Save SEM image", self)
         menu_sem.addAction("as .tif", lambda: self.save_data("sem", "tif"))
         menu_sem.addAction("as .png", lambda: self.save_data("sem", "png"))
         save_menu.addMenu(menu_sem)
 
-        # 2. Submenú: Save Current Map (NUEVO)
         menu_ebic = QMenu("Save Current Map", self)
         menu_ebic.addAction("as .tif", lambda: self.save_data("ebic_img", "tif"))
         menu_ebic.addAction("as .png", lambda: self.save_data("ebic_img", "png"))
         save_menu.addMenu(menu_ebic)
 
-        # 3. Submenú: Save SEM + Current Map
         menu_overlay = QMenu("Save SEM + Current Map", self)
         menu_overlay.addAction("as .tif", lambda: self.save_data("overlay", "tif"))
         menu_overlay.addAction("as .png", lambda: self.save_data("overlay", "png"))
         save_menu.addMenu(menu_overlay)
 
-        # 4. Submenú: Save screen (Guarda ejes, zoom, lineas, etc)
         menu_screen = QMenu("Save screen", self)
         menu_screen.addAction("as .tif", lambda: self.save_data("screen", "tif"))
         menu_screen.addAction("as .png", lambda: self.save_data("screen", "png"))
         save_menu.addMenu(menu_screen)
 
         save_menu.addSeparator()
-        
-        # 5. Guardado CSV
         save_menu.addAction("Save SEM map (.csv)", lambda: self.save_data("sem", "csv"))
         save_menu.addAction("Save Current Map (.csv)", lambda: self.save_data("ebic", "csv"))
 
@@ -165,18 +161,16 @@ class CorrelationGui(QMainWindow):
 
         self.main_layout.addWidget(self.left_panel)
 
-        # -- CENTRO (Matplotlib + Controles de Frame) --
+        # -- CENTRO --
         self.center_panel = QWidget()
         self.center_layout = QVBoxLayout(self.center_panel)
         self.center_layout.setContentsMargins(0,0,0,0)
         
-        # Figura Matplotlib
         self.fig = Figure(figsize=(8, 6), facecolor='#ffffff')
         self.canvas = FigureCanvas(self.fig)
         self.ax = self.fig.add_subplot(111)
         self.center_layout.addWidget(self.canvas)
         
-        # --- BARRA DE NAVEGACIÓN DE FRAMES ---
         self.frame_nav_layout = QHBoxLayout()
         self.frame_nav_layout.setContentsMargins(10, 5, 10, 15)
         
@@ -199,7 +193,6 @@ class CorrelationGui(QMainWindow):
         self.frame_nav_layout.addStretch()
         
         self.center_layout.addLayout(self.frame_nav_layout)
-        
         self.main_layout.addWidget(self.center_panel)
 
         # -- PANEL DERECHO --
@@ -258,7 +251,6 @@ class CorrelationGui(QMainWindow):
                 elif mode == 'line': self.canvas.setCursor(Qt.CursorShape.CrossCursor)
         except Exception as e: print(e)
 
-    # --- PANTALLA DE INSTRUCCIONES ---
     def show_placeholder(self):
         self.ax.clear()
         self.ax.axis('off') 
@@ -278,10 +270,8 @@ class CorrelationGui(QMainWindow):
                      ha='center', va='center', 
                      fontsize=11, color='#333333',
                      bbox=dict(boxstyle='round,pad=1.5', facecolor='#f8f9fa', edgecolor='#cccccc'))
-        
         self.ax.set_title("") 
         
-        # Desactivar botones de frame
         self.btn_prev_frame.setEnabled(False)
         self.btn_next_frame.setEnabled(False)
         self.lbl_frame_info.setText("Frame: - / -")
@@ -289,7 +279,6 @@ class CorrelationGui(QMainWindow):
         self.canvas.draw()
 
     # --- LÓGICA DE CARGA ---
-
     def upload_image(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Cargar TIF", "", "TIF Files (*.tif *.tiff)")
         if file_path:
@@ -336,7 +325,53 @@ class CorrelationGui(QMainWindow):
             self.update_frame_ui()
             self.canvas.draw()
 
-    # --- LÓGICA DE GUARDADO MODIFICADA ---
+    # --- CÁLCULO DE SCALE BAR AUTOMÁTICO (USANDO METADATA) ---
+    def draw_scale_bar(self):
+        """Calcula y dibuja una scale bar óptima (~20% del ancho) leyendo la metadata del TIFF."""
+        pixel_size_m = self.data_manager.pixel_size
+        
+        # Fallback de seguridad por si falla la metadata (Evitar divisiones por cero o medidas irreales)
+        if pixel_size_m <= 0: 
+            pixel_size_m = 1e-6 # Asumimos 1 um por defecto si algo falla gravemente
+            
+        # Calcular el Field of View (ancho total de la imagen en metros)
+        fov_m = pixel_size_m * self.img_width
+        
+        # Buscamos que la barra ocupe más o menos el 20%
+        target_width_m = fov_m * 0.20
+        
+        scales = [
+            (10e-9, "10 nm"),
+            (100e-9, "100 nm"),
+            (1e-6, "1 \u03BCm"), # \u03BC es el símbolo micro
+            (10e-6, "10 \u03BCm"),
+            (100e-6, "100 \u03BCm"),
+            (1e-3, "1 mm")
+        ]
+        
+        # Encontrar la escala que tenga la menor diferencia con el tamaño objetivo (20%)
+        best_scale_m, best_scale_label = min(scales, key=lambda x: abs(x[0] - target_width_m))
+        
+        # Calcular su tamaño en píxeles para dibujarla
+        self.scale_bar_length_px = best_scale_m / pixel_size_m
+        self.scale_bar_label = best_scale_label
+        
+        # Posicionamiento: Esquina inferior derecha
+        margin_x = self.img_width * 0.05
+        margin_y = self.img_height * 0.05
+        x0 = self.img_width - margin_x - self.scale_bar_length_px
+        x1 = self.img_width - margin_x
+        y0 = self.img_height - margin_y
+        
+        # Dibujar la línea verde
+        self.ax.add_line(Line2D([x0, x1], [y0, y0], color='#00FF00', linewidth=2))
+        
+        # Añadir el texto encima de la línea
+        self.ax.text(x0 + self.scale_bar_length_px/2, y0 - (self.img_height*0.02), 
+                     self.scale_bar_label, color='#00FF00', fontsize=11, 
+                     fontweight='bold', ha='center', va='bottom')
+
+    # --- LÓGICA DE GUARDADO ---
     def save_data(self, content_type, file_format):
         if self.data_manager.sem_data is None:
             self.status_bar.showMessage("Error: No hay datos cargados para guardar.", 3000)
@@ -345,17 +380,12 @@ class CorrelationGui(QMainWindow):
         filter_str = f"{file_format.upper()} Files (*.{file_format})"
         file_path, _ = QFileDialog.getSaveFileName(self, f"Guardar como {file_format.upper()}", "", filter_str)
         
-        if not file_path:
-            return 
-            
-        if not file_path.lower().endswith(f".{file_format}"):
-            file_path += f".{file_format}"
+        if not file_path: return 
+        if not file_path.lower().endswith(f".{file_format}"): file_path += f".{file_format}"
 
         try:
-            # Opción 1: CSV de SEM o EBIC
             if content_type == "sem" and file_format == "csv":
                 np.savetxt(file_path, self.data_manager.sem_data, delimiter=",")
-            
             elif content_type == "ebic" and file_format == "csv":
                 if self.data_manager.current_map is not None:
                     np.savetxt(file_path, self.data_manager.current_map, delimiter=",")
@@ -363,11 +393,9 @@ class CorrelationGui(QMainWindow):
                     self.status_bar.showMessage("Error: No hay datos EBIC disponibles.", 3000)
                     return
 
-            # Opción 2: Guardar solo imagen SEM base
             elif content_type == "sem" and file_format in ["tif", "png"]:
                 mpimg.imsave(file_path, self.data_manager.sem_data, cmap='gray')
 
-            # Opción 3: Guardar solo el Current Map (EBIC en colores usando el cmap actual)
             elif content_type == "ebic_img" and file_format in ["tif", "png"]:
                 if self.data_manager.current_map is not None:
                     mpimg.imsave(file_path, self.data_manager.current_map, cmap=self.current_cmap)
@@ -375,25 +403,34 @@ class CorrelationGui(QMainWindow):
                     self.status_bar.showMessage("Error: No hay datos EBIC disponibles.", 3000)
                     return
 
-            # Opción 4: Screen Completa
             elif content_type == "screen":
                 self.fig.savefig(file_path, format=file_format, bbox_inches='tight')
 
-            # Opción 5: Overlay limpio a resolución original
             elif content_type == "overlay":
                 temp_fig = Figure(figsize=(self.img_width/100, self.img_height/100), dpi=100)
                 temp_ax = temp_fig.add_subplot(111)
                 temp_ax.axis('off') 
-                
                 extent_fixed = [0, self.img_width, self.img_height, 0]
                 
                 temp_ax.imshow(self.data_manager.sem_data, cmap='gray', aspect='equal', extent=extent_fixed)
-                
                 if self.data_manager.current_map is not None:
                     temp_ax.imshow(self.data_manager.current_map, cmap=self.current_cmap, 
                                    alpha=self.opacity, aspect='equal', extent=extent_fixed,
                                    vmin=np.nanmin(self.data_manager.current_map), 
                                    vmax=np.nanmax(self.data_manager.current_map))
+                
+                # --- Exportar la barra de escala limpia también ---
+                if self.scale_bar_length_px:
+                    margin_x = self.img_width * 0.05
+                    margin_y = self.img_height * 0.05
+                    x0 = self.img_width - margin_x - self.scale_bar_length_px
+                    x1 = self.img_width - margin_x
+                    y0 = self.img_height - margin_y
+                    
+                    temp_ax.add_line(Line2D([x0, x1], [y0, y0], color='#00FF00', linewidth=2))
+                    temp_ax.text(x0 + self.scale_bar_length_px/2, y0 - (self.img_height*0.02), 
+                                 self.scale_bar_label, color='#00FF00', fontsize=16, 
+                                 fontweight='bold', ha='center', va='bottom')
                 
                 temp_fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
                 temp_fig.savefig(file_path, format=file_format, pad_inches=0)
@@ -410,13 +447,15 @@ class CorrelationGui(QMainWindow):
         self.layer_sem = None
         self.layer_ebic = None
         if self.cbar:
-            try:
-                self.cbar.remove()
+            try: self.cbar.remove()
             except: pass
             self.cbar = None
 
         self.stored_lines = []
         self.current_line_artist = None
+        
+        self.scale_bar_length_px = None
+        self.scale_bar_label = None
         
         self.frames_list = []
         self.current_frame_idx = 0
@@ -457,7 +496,6 @@ class CorrelationGui(QMainWindow):
         
         extent_fixed = [0, self.img_width, self.img_height, 0]
 
-        # 1. Capa Base (Inicialmente SEM Frame 0)
         base_data = self.frames_list[0] if self.frames_list else np.zeros((self.img_height, self.img_width))
         self.layer_sem = self.ax.imshow(base_data, 
                                         cmap='gray', 
@@ -469,7 +507,6 @@ class CorrelationGui(QMainWindow):
         vmax = np.nanmax(base_data)
         if vmin != vmax: self.layer_sem.set_clim(vmin, vmax)
 
-        # 2. Capa EBIC (Overlay - Siempre usa current_map)
         if self.data_manager.current_map is not None:
             data_ebic = self.data_manager.current_map
             vmin = np.nanmin(data_ebic)
@@ -490,6 +527,10 @@ class CorrelationGui(QMainWindow):
             self.cbar.ax.set_visible(False)
         
         self.ax.set_title("Vista SEM (Frame 0)")
+        
+        # --- LLAMADA A LA BARRA DE ESCALA ---
+        self.draw_scale_bar()
+        
         self.canvas.draw()
 
     # --- ACCIONES ---
