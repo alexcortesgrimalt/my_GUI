@@ -25,6 +25,9 @@ class CorrelationGui(QMainWindow):
         # --- ESTADO VISUAL ---
         self.img_width = 0
         self.img_height = 0
+        self.pixel_size_um = 1.0
+        self.width_um = 0.0
+        self.height_um = 0.0
         
         self.mode = "view" 
         self.show_overlay = False 
@@ -35,8 +38,8 @@ class CorrelationGui(QMainWindow):
         self.layer_ebic = None
         self.cbar = None 
         
-        # Datos de la scale bar para exportación
-        self.scale_bar_length_px = None
+        # Datos de la scale bar para exportación (ahora en micras)
+        self.scale_bar_length_um = None
         self.scale_bar_label = None
         
         self.colormaps = ['plasma', 'viridis', 'inferno', 'magma', 'cividis', 'rainbow', 'jet', 'gray']
@@ -112,7 +115,7 @@ class CorrelationGui(QMainWindow):
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.lbl_coords = QLabel("Coordenadas: - , -")
+        self.lbl_coords = QLabel("Coordenadas (Px): - , -")
         self.status_bar.addPermanentWidget(self.lbl_coords)
 
         # 2. Main Layout
@@ -325,49 +328,44 @@ class CorrelationGui(QMainWindow):
             self.update_frame_ui()
             self.canvas.draw()
 
-    # --- CÁLCULO DE SCALE BAR AUTOMÁTICO (USANDO METADATA) ---
+    # --- CÁLCULO DE SCALE BAR AUTOMÁTICO ---
     def draw_scale_bar(self):
-        """Calcula y dibuja una scale bar óptima (~20% del ancho) leyendo la metadata del TIFF."""
+        """Calcula y dibuja una scale bar óptima usando el FOV físico."""
         pixel_size_m = self.data_manager.pixel_size
-        
-        # Fallback de seguridad por si falla la metadata (Evitar divisiones por cero o medidas irreales)
         if pixel_size_m <= 0: 
-            pixel_size_m = 1e-6 # Asumimos 1 um por defecto si algo falla gravemente
+            pixel_size_m = 1e-6 
             
-        # Calcular el Field of View (ancho total de la imagen en metros)
         fov_m = pixel_size_m * self.img_width
-        
-        # Buscamos que la barra ocupe más o menos el 20%
         target_width_m = fov_m * 0.20
         
         scales = [
             (10e-9, "10 nm"),
             (100e-9, "100 nm"),
-            (1e-6, "1 \u03BCm"), # \u03BC es el símbolo micro
+            (1e-6, "1 \u03BCm"), 
             (10e-6, "10 \u03BCm"),
             (100e-6, "100 \u03BCm"),
             (1e-3, "1 mm")
         ]
         
-        # Encontrar la escala que tenga la menor diferencia con el tamaño objetivo (20%)
         best_scale_m, best_scale_label = min(scales, key=lambda x: abs(x[0] - target_width_m))
         
-        # Calcular su tamaño en píxeles para dibujarla
-        self.scale_bar_length_px = best_scale_m / pixel_size_m
+        self.scale_bar_length_um = best_scale_m * 1e6
         self.scale_bar_label = best_scale_label
         
-        # Posicionamiento: Esquina inferior derecha
-        margin_x = self.img_width * 0.05
-        margin_y = self.img_height * 0.05
-        x0 = self.img_width - margin_x - self.scale_bar_length_px
-        x1 = self.img_width - margin_x
-        y0 = self.img_height - margin_y
+        # Posicionamiento: Esquina inferior derecha en unidades físicas (µm)
+        margin_x = self.width_um * 0.05
+        margin_y = self.height_um * 0.05
+        
+        x1 = self.width_um - margin_x
+        x0 = x1 - self.scale_bar_length_um
+        # COMO EL EJE CRECE HACIA ARRIBA, la parte inferior de la imagen está cerca de Y=0
+        y0 = margin_y 
         
         # Dibujar la línea verde
         self.ax.add_line(Line2D([x0, x1], [y0, y0], color='#00FF00', linewidth=1))
         
-        # Añadir el texto encima de la línea
-        self.ax.text(x0 + self.scale_bar_length_px/2, y0 - (self.img_height*0.02), 
+        # Añadir el texto ligeramente POR ENCIMA de la línea
+        self.ax.text(x0 + self.scale_bar_length_um/2, y0 + (self.height_um*0.02), 
                      self.scale_bar_label, color='#00FF00', fontsize=11, 
                      fontweight='normal', ha='center', va='bottom')
 
@@ -410,26 +408,28 @@ class CorrelationGui(QMainWindow):
                 temp_fig = Figure(figsize=(self.img_width/100, self.img_height/100), dpi=100)
                 temp_ax = temp_fig.add_subplot(111)
                 temp_ax.axis('off') 
-                extent_fixed = [0, self.img_width, self.img_height, 0]
                 
-                temp_ax.imshow(self.data_manager.sem_data, cmap='gray', aspect='equal', extent=extent_fixed)
+                # OJO: Aquí extent físico con origen 0,0 en la esquina inferior izquierda
+                extent_physical = [0, self.width_um, 0, self.height_um]
+                
+                temp_ax.imshow(self.data_manager.sem_data, cmap='gray', aspect='equal', extent=extent_physical)
                 if self.data_manager.current_map is not None:
                     temp_ax.imshow(self.data_manager.current_map, cmap=self.current_cmap, 
-                                   alpha=self.opacity, aspect='equal', extent=extent_fixed,
+                                   alpha=self.opacity, aspect='equal', extent=extent_physical,
                                    vmin=np.nanmin(self.data_manager.current_map), 
                                    vmax=np.nanmax(self.data_manager.current_map))
                 
-                # --- Exportar la barra de escala limpia también ---
-                if self.scale_bar_length_px:
-                    margin_x = self.img_width * 0.05
-                    margin_y = self.img_height * 0.05
-                    x0 = self.img_width - margin_x - self.scale_bar_length_px
-                    x1 = self.img_width - margin_x
-                    y0 = self.img_height - margin_y
+                # --- Exportar la barra de escala ---
+                if self.scale_bar_length_um:
+                    margin_x = self.width_um * 0.05
+                    margin_y = self.height_um * 0.05
+                    x1 = self.width_um - margin_x
+                    x0 = x1 - self.scale_bar_length_um
+                    y0 = margin_y 
                     
                     temp_ax.add_line(Line2D([x0, x1], [y0, y0], color='#00FF00', linewidth=1))
-                    temp_ax.text(x0 + self.scale_bar_length_px/2, y0 - (self.img_height*0.02), 
-                                 self.scale_bar_label, color='#00FF00', fontsize=16, 
+                    temp_ax.text(x0 + self.scale_bar_length_um/2, y0 + (self.height_um*0.02), 
+                                 self.scale_bar_label, color='#00FF00', fontsize=14, 
                                  fontweight='normal', ha='center', va='bottom')
                 
                 temp_fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
@@ -454,7 +454,7 @@ class CorrelationGui(QMainWindow):
         self.stored_lines = []
         self.current_line_artist = None
         
-        self.scale_bar_length_px = None
+        self.scale_bar_length_um = None
         self.scale_bar_label = None
         
         self.frames_list = []
@@ -494,14 +494,23 @@ class CorrelationGui(QMainWindow):
         self.current_frame_idx = 0
         self.update_frame_ui()
         
-        extent_fixed = [0, self.img_width, self.img_height, 0]
+        # CÁLCULO FÍSICO (Micras)
+        px_size = self.data_manager.pixel_size if self.data_manager.pixel_size > 0 else 1e-6
+        self.pixel_size_um = px_size * 1e6
+        
+        self.width_um = self.img_width * self.pixel_size_um
+        self.height_um = self.img_height * self.pixel_size_um
+        
+        # EL ORIGEN Y EJE Y CRECE HACIA ARRIBA:
+        # El 0 de y está abajo, la altura máxima está arriba.
+        extent_physical = [0, self.width_um, 0, self.height_um]
 
         base_data = self.frames_list[0] if self.frames_list else np.zeros((self.img_height, self.img_width))
         self.layer_sem = self.ax.imshow(base_data, 
                                         cmap='gray', 
                                         interpolation='nearest',
                                         aspect='equal',
-                                        extent=extent_fixed)
+                                        extent=extent_physical)
         
         vmin = np.nanmin(base_data)
         vmax = np.nanmax(base_data)
@@ -517,7 +526,7 @@ class CorrelationGui(QMainWindow):
                                              alpha=self.opacity, 
                                              interpolation='nearest',
                                              aspect='equal',
-                                             extent=extent_fixed,
+                                             extent=extent_physical,
                                              vmin=vmin, vmax=vmax)
             
             self.cbar = self.fig.colorbar(self.layer_ebic, ax=self.ax, fraction=0.046, pad=0.04)
@@ -526,20 +535,22 @@ class CorrelationGui(QMainWindow):
             self.layer_ebic.set_visible(False)
             self.cbar.ax.set_visible(False)
         
+        # Etiquetar los ejes
+        self.ax.set_xlabel("Distancia (\u03BCm)")
+        self.ax.set_ylabel("Distancia (\u03BCm)")
         self.ax.set_title("Vista SEM (Frame 0)")
         
-        # --- LLAMADA A LA BARRA DE ESCALA ---
         self.draw_scale_bar()
-        
         self.canvas.draw()
 
     # --- ACCIONES ---
 
     def action_home_reset(self):
-        if self.img_width == 0: return 
+        if self.width_um == 0: return 
 
-        self.ax.set_xlim(0, self.img_width)
-        self.ax.set_ylim(self.img_height, 0)
+        self.ax.set_xlim(0, self.width_um)
+        # Aquí también invertimos para que 0 esté abajo
+        self.ax.set_ylim(0, self.height_um)
 
         for line in self.stored_lines:
             line.remove()
@@ -604,10 +615,18 @@ class CorrelationGui(QMainWindow):
     def on_mouse_move(self, event):
         try:
             if event.inaxes:
-                txt = f"X: {int(event.xdata)}, Y: {int(event.ydata)}"
+                # Convertimos de micras a píxeles. 
+                # Como el eje Y crece hacia arriba, el píxel Y=0 (top) está en self.height_um.
+                px_x = int(event.xdata / self.pixel_size_um)
+                px_y = int((self.height_um - event.ydata) / self.pixel_size_um)
+                
+                px_x = max(0, min(px_x, self.img_width - 1))
+                px_y = max(0, min(px_y, self.img_height - 1))
+                
+                txt = f"X (px): {px_x}, Y (px): {px_y}"
                 self.lbl_coords.setText(txt)
             else:
-                self.lbl_coords.setText("Coordenadas: - , -")
+                self.lbl_coords.setText("Coordenadas (Px): - , -")
                 return
 
             if self.mode == 'pan' and self.pan_start:
@@ -623,7 +642,7 @@ class CorrelationGui(QMainWindow):
         except: pass
 
     def zoom_fun(self, event):
-        if self.img_width == 0: return
+        if self.width_um == 0: return
         try:
             base_scale = 1.2
             if event.inaxes != self.ax: return
@@ -635,7 +654,7 @@ class CorrelationGui(QMainWindow):
             new_width = (cur_xlim[1] - cur_xlim[0]) * scale_factor
             new_height = (cur_ylim[1] - cur_ylim[0]) * scale_factor
             
-            if new_width > self.img_width * 3: return
+            if new_width > self.width_um * 3: return
 
             relx = (cur_xlim[1] - xdata) / (cur_xlim[1] - cur_xlim[0])
             rely = (cur_ylim[1] - ydata) / (cur_ylim[1] - cur_ylim[0])
