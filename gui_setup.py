@@ -45,6 +45,8 @@ class CorrelationGui(QMainWindow):
         # Datos de la scale bar
         self.scale_bar_length_phys = None
         self.scale_bar_label = None
+        self.scale_bar_line = None # Guardamos el objeto gráfico de la línea
+        self.scale_bar_text = None # Guardamos el objeto gráfico del texto
         
         self.colormaps = ['plasma', 'viridis', 'inferno', 'magma', 'cividis', 'rainbow', 'jet', 'gray']
         self.current_cmap = 'plasma'
@@ -337,15 +339,29 @@ class CorrelationGui(QMainWindow):
             self.update_frame_ui()
             self.canvas.draw()
 
-    # --- CÁLCULO DE SCALE BAR AUTOMÁTICO ---
+    # --- CÁLCULO DE SCALE BAR AUTOMÁTICO (DINÁMICO CON ZOOM) ---
     def draw_scale_bar(self):
-        """Calcula y dibuja una scale bar óptima usando el FOV físico."""
-        pixel_size_m = self.data_manager.pixel_size
-        if pixel_size_m <= 0: 
-            pixel_size_m = 1e-6 
-            
-        fov_m = pixel_size_m * self.img_width
-        target_width_m = fov_m * 0.20
+        """Calcula y dibuja una scale bar anclada a la esquina inferior derecha del FOV visible."""
+        if self.width_phys == 0: return
+        
+        # Eliminar la barra anterior si ya existía
+        if self.scale_bar_line:
+            try: self.scale_bar_line.remove()
+            except: pass
+        if self.scale_bar_text:
+            try: self.scale_bar_text.remove()
+            except: pass
+
+        # Obtener los límites visibles actuales (dependen del zoom)
+        xlim = self.ax.get_xlim()
+        ylim = self.ax.get_ylim()
+        
+        vis_width = abs(xlim[1] - xlim[0])
+        vis_height = abs(ylim[1] - ylim[0])
+        
+        # Buscar que la barra ocupe ~20% del ANCHO VISIBLE
+        target_width_phys = vis_width * 0.20
+        target_width_m = target_width_phys / self.unit_factor
         
         scales = [
             (10e-9, "10 nm"),
@@ -358,25 +374,25 @@ class CorrelationGui(QMainWindow):
         
         best_scale_m, best_scale_label = min(scales, key=lambda x: abs(x[0] - target_width_m))
         
-        # Guardamos la longitud de la barra en las unidades físicas actuales de los ejes
         self.scale_bar_length_phys = best_scale_m * self.unit_factor
         self.scale_bar_label = best_scale_label
         
-        # Posicionamiento: Esquina inferior derecha
-        margin_x = self.width_phys * 0.05
-        margin_y = self.height_phys * 0.05
+        # Posicionamiento: Esquina inferior derecha de lo que se ve AHORA MISMO
+        margin_x = vis_width * 0.05
+        margin_y = vis_height * 0.05
         
-        x1 = self.width_phys - margin_x
+        x1 = max(xlim) - margin_x
         x0 = x1 - self.scale_bar_length_phys
-        y0 = margin_y 
+        y0 = min(ylim) + margin_y 
         
         # Dibujar la línea verde
-        self.ax.add_line(Line2D([x0, x1], [y0, y0], color='#00FF00', linewidth=1))
+        self.scale_bar_line = Line2D([x0, x1], [y0, y0], color='#00FF00', linewidth=1)
+        self.ax.add_line(self.scale_bar_line)
         
         # Añadir el texto ligeramente POR ENCIMA de la línea
-        self.ax.text(x0 + self.scale_bar_length_phys/2, y0 + (self.height_phys*0.02), 
-                     self.scale_bar_label, color='#00FF00', fontsize=11, 
-                     fontweight='normal', ha='center', va='bottom')
+        self.scale_bar_text = self.ax.text(x0 + self.scale_bar_length_phys/2, y0 + (vis_height*0.02), 
+                                           self.scale_bar_label, color='#00FF00', fontsize=11, 
+                                           fontweight='normal', ha='center', va='bottom')
 
     # --- LÓGICA DE GUARDADO ---
     def save_data(self, content_type, file_format):
@@ -414,6 +430,7 @@ class CorrelationGui(QMainWindow):
                 self.fig.savefig(file_path, format=file_format, bbox_inches='tight')
 
             elif content_type == "overlay":
+                # Nota: la exportación de "overlay" siempre guarda la imagen COMPLETA (sin zoom)
                 temp_fig = Figure(figsize=(self.img_width/100, self.img_height/100), dpi=100)
                 temp_ax = temp_fig.add_subplot(111)
                 temp_ax.axis('off') 
@@ -427,18 +444,22 @@ class CorrelationGui(QMainWindow):
                                    vmin=np.nanmin(self.data_manager.current_map), 
                                    vmax=np.nanmax(self.data_manager.current_map))
                 
-                # --- Exportar la barra de escala ---
-                if self.scale_bar_length_phys:
-                    margin_x = self.width_phys * 0.05
-                    margin_y = self.height_phys * 0.05
-                    x1 = self.width_phys - margin_x
-                    x0 = x1 - self.scale_bar_length_phys
-                    y0 = margin_y 
-                    
-                    temp_ax.add_line(Line2D([x0, x1], [y0, y0], color='#00FF00', linewidth=1))
-                    temp_ax.text(x0 + self.scale_bar_length_phys/2, y0 + (self.height_phys*0.02), 
-                                 self.scale_bar_label, color='#00FF00', fontsize=14, 
-                                 fontweight='normal', ha='center', va='bottom')
+                # Calcular barra de escala expresamente para la imagen completa
+                target_m = (self.width_phys / self.unit_factor) * 0.20
+                scales = [(10e-9, "10 nm"), (100e-9, "100 nm"), (1e-6, "1 \u03BCm"), (10e-6, "10 \u03BCm"), (100e-6, "100 \u03BCm"), (1e-3, "1 mm")]
+                best_m, best_lbl = min(scales, key=lambda x: abs(x[0] - target_m))
+                sb_len_phys = best_m * self.unit_factor
+                
+                margin_x = self.width_phys * 0.05
+                margin_y = self.height_phys * 0.05
+                x1 = self.width_phys - margin_x
+                x0 = x1 - sb_len_phys
+                y0 = margin_y 
+                
+                temp_ax.add_line(Line2D([x0, x1], [y0, y0], color='#00FF00', linewidth=1))
+                temp_ax.text(x0 + sb_len_phys/2, y0 + (self.height_phys*0.02), 
+                             best_lbl, color='#00FF00', fontsize=14, 
+                             fontweight='normal', ha='center', va='bottom')
                 
                 temp_fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
                 temp_fig.savefig(file_path, format=file_format, pad_inches=0)
@@ -464,6 +485,8 @@ class CorrelationGui(QMainWindow):
         
         self.scale_bar_length_phys = None
         self.scale_bar_label = None
+        self.scale_bar_line = None
+        self.scale_bar_text = None
         
         self.frames_list = []
         self.current_frame_idx = 0
@@ -564,6 +587,10 @@ class CorrelationGui(QMainWindow):
         # Aplicar grid si estaba activo
         self.ax.grid(self.btn_grid.isChecked())
         
+        # Forzar los límites antes de dibujar la escala por primera vez
+        self.ax.set_xlim(0, self.width_phys)
+        self.ax.set_ylim(0, self.height_phys)
+        
         self.draw_scale_bar()
         self.canvas.draw()
 
@@ -582,6 +609,7 @@ class CorrelationGui(QMainWindow):
         self.line_start_point = None
 
         self.set_mode("view")
+        self.draw_scale_bar() # Reajustar la barra de nuevo
         self.canvas.draw()
 
     def toggle_grid(self):
@@ -675,6 +703,8 @@ class CorrelationGui(QMainWindow):
 
                 self.ax.set_xlim(new_xlim)
                 self.ax.set_ylim(new_ylim)
+                
+                self.draw_scale_bar() # Redibujar la barra para que persiga a la esquina
                 self.canvas.draw()
                 
             elif self.mode == 'line' and self.line_start_point and self.current_line_artist:
@@ -711,5 +741,7 @@ class CorrelationGui(QMainWindow):
 
             self.ax.set_xlim(new_xlim)
             self.ax.set_ylim(new_ylim)
+            
+            self.draw_scale_bar() # Adaptar la barra al nuevo nivel de zoom
             self.canvas.draw()
         except: pass
