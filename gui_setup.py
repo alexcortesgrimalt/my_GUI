@@ -1,7 +1,8 @@
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QFileDialog, QToolBar, QFrame, QLabel, 
                              QPushButton, QStatusBar, QButtonGroup, QSlider,
-                             QComboBox, QMenu, QToolButton)
+                             QComboBox, QMenu, QToolButton, QTabWidget,
+                             QDoubleSpinBox, QCheckBox, QMessageBox)
 from PyQt6.QtGui import QAction
 from PyQt6.QtCore import Qt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -9,9 +10,11 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 import matplotlib.image as mpimg 
 import numpy as np
+import scipy.ndimage as ndi
 
-# Importamos el data manager
+# Importamos el data manager y el analyzer
 from image_handler import SEMDataManager
+from junction_analyzer import JunctionAnalyzer
 
 class CorrelationGui(QMainWindow):
     def __init__(self):
@@ -45,8 +48,8 @@ class CorrelationGui(QMainWindow):
         # Datos de la scale bar
         self.scale_bar_length_phys = None
         self.scale_bar_label = None
-        self.scale_bar_line = None # Guardamos el objeto gráfico de la línea
-        self.scale_bar_text = None # Guardamos el objeto gráfico del texto
+        self.scale_bar_line = None
+        self.scale_bar_text = None
         
         self.colormaps = ['plasma', 'viridis', 'inferno', 'magma', 'cividis', 'rainbow', 'jet', 'gray']
         self.current_cmap = 'plasma'
@@ -56,6 +59,7 @@ class CorrelationGui(QMainWindow):
         self.line_start_point = None
         self.current_line_artist = None 
         self.stored_lines = [] 
+        self.junction_line_artist = None
         
         # --- NAVEGACIÓN DE FRAMES ---
         self.frames_list = []
@@ -91,27 +95,22 @@ class CorrelationGui(QMainWindow):
         save_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         
         save_menu = QMenu()
-        
         menu_sem = QMenu("Save SEM image", self)
         menu_sem.addAction("as .tif", lambda: self.save_data("sem", "tif"))
         menu_sem.addAction("as .png", lambda: self.save_data("sem", "png"))
         save_menu.addMenu(menu_sem)
-
         menu_ebic = QMenu("Save Current Map", self)
         menu_ebic.addAction("as .tif", lambda: self.save_data("ebic_img", "tif"))
         menu_ebic.addAction("as .png", lambda: self.save_data("ebic_img", "png"))
         save_menu.addMenu(menu_ebic)
-
         menu_overlay = QMenu("Save SEM + Current Map", self)
         menu_overlay.addAction("as .tif", lambda: self.save_data("overlay", "tif"))
         menu_overlay.addAction("as .png", lambda: self.save_data("overlay", "png"))
         save_menu.addMenu(menu_overlay)
-
         menu_screen = QMenu("Save screen", self)
         menu_screen.addAction("as .tif", lambda: self.save_data("screen", "tif"))
         menu_screen.addAction("as .png", lambda: self.save_data("screen", "png"))
         save_menu.addMenu(menu_screen)
-
         save_menu.addSeparator()
         save_menu.addAction("Save SEM map (.csv)", lambda: self.save_data("sem", "csv"))
         save_menu.addAction("Save Current Map (.csv)", lambda: self.save_data("ebic", "csv"))
@@ -209,28 +208,31 @@ class CorrelationGui(QMainWindow):
         self.center_layout.addLayout(self.frame_nav_layout)
         self.main_layout.addWidget(self.center_panel)
 
-        # -- PANEL DERECHO --
+        # -- PANEL DERECHO (Pestañas) --
         self.right_panel = QFrame()
-        self.right_panel.setFixedWidth(260)
+        self.right_panel.setFixedWidth(280)
         self.right_panel.setStyleSheet("background-color: #f0f0f0; border-left: 1px solid #dcdcdc;")
-        
         self.right_layout = QVBoxLayout(self.right_panel)
-        self.right_layout.setContentsMargins(15, 20, 15, 20)
+        self.right_layout.setContentsMargins(5, 5, 5, 5)
+
+        self.tabs_right = QTabWidget()
         
+        # PESTAÑA 1: VISUALIZACIÓN
+        self.tab_vis = QWidget()
+        vis_layout = QVBoxLayout(self.tab_vis)
         lbl_props = QLabel("Visualización")
         lbl_props.setStyleSheet("font-weight: bold; font-size: 14px;")
-        self.right_layout.addWidget(lbl_props)
-        self.right_layout.addSpacing(20)
+        vis_layout.addWidget(lbl_props)
+        vis_layout.addSpacing(20)
 
         lbl_cmap = QLabel("Paleta de Color:")
         self.combo_cmap = QComboBox()
         self.combo_cmap.addItems(self.colormaps)
         self.combo_cmap.setCurrentText(self.current_cmap)
         self.combo_cmap.currentTextChanged.connect(self.update_layer_props)
-        
-        self.right_layout.addWidget(lbl_cmap)
-        self.right_layout.addWidget(self.combo_cmap)
-        self.right_layout.addSpacing(20)
+        vis_layout.addWidget(lbl_cmap)
+        vis_layout.addWidget(self.combo_cmap)
+        vis_layout.addSpacing(20)
 
         self.lbl_opacity = QLabel(f"Intensidad EBIC: {int(self.opacity*100)}%")
         self.slider_opacity = QSlider(Qt.Orientation.Horizontal)
@@ -238,10 +240,63 @@ class CorrelationGui(QMainWindow):
         self.slider_opacity.setMaximum(100)
         self.slider_opacity.setValue(int(self.opacity*100))
         self.slider_opacity.valueChanged.connect(self.update_layer_props)
-        self.right_layout.addWidget(self.lbl_opacity)
-        self.right_layout.addWidget(self.slider_opacity)
+        vis_layout.addWidget(self.lbl_opacity)
+        vis_layout.addWidget(self.slider_opacity)
+        vis_layout.addStretch()
         
-        self.right_layout.addStretch()
+        # PESTAÑA 2: JUNCTION
+        self.tab_junc = QWidget()
+        junc_layout = QVBoxLayout(self.tab_junc)
+        
+        lbl_junc_title = QLabel("Junction Detection")
+        lbl_junc_title.setStyleSheet("font-weight: bold; font-size: 14px;")
+        junc_layout.addWidget(lbl_junc_title)
+        junc_layout.addSpacing(10)
+        
+        lbl_inst_1 = QLabel("1. Dibuja una única línea cercana\n a la junction (herramienta 📏).")
+        lbl_inst_1.setWordWrap(True)
+        junc_layout.addWidget(lbl_inst_1)
+        
+        junc_layout.addSpacing(10)
+        lbl_inst_2 = QLabel("2. Half-width of the junction (\u03BCm):")
+        self.spin_hw = QDoubleSpinBox()
+        self.spin_hw.setRange(0.01, 100.0)
+        self.spin_hw.setSingleStep(0.1)
+        self.spin_hw.setValue(1.0)
+        junc_layout.addWidget(lbl_inst_2)
+        junc_layout.addWidget(self.spin_hw)
+        
+        junc_layout.addSpacing(15)
+        lbl_plots = QLabel("3. Selecciona las salidas:")
+        lbl_plots.setStyleSheet("font-weight: bold;")
+        junc_layout.addWidget(lbl_plots)
+        
+        self.chk_a = QCheckBox("a) SEM ROI - EBIC / Current ROI")
+        self.chk_b = QCheckBox("b) Junction Detection Comparison")
+        self.chk_c = QCheckBox("c) Raw EBIC & Filtered EBIC")
+        self.chk_d = QCheckBox("d) Canny (Filtered, Spline) - General")
+        self.chk_e = QCheckBox("e) Observe Junction (Over Main)")
+        
+        self.chk_e.setChecked(True) # Activado por defecto
+        
+        junc_layout.addWidget(self.chk_a)
+        junc_layout.addWidget(self.chk_b)
+        junc_layout.addWidget(self.chk_c)
+        junc_layout.addWidget(self.chk_d)
+        junc_layout.addWidget(self.chk_e)
+        
+        junc_layout.addSpacing(15)
+        self.btn_run_junction = QPushButton("OK")
+        self.btn_run_junction.setStyleSheet("QPushButton { font-weight: bold; background-color: #d1e7dd; padding: 8px; }")
+        self.btn_run_junction.clicked.connect(self.run_junction_detection)
+        junc_layout.addWidget(self.btn_run_junction)
+        
+        junc_layout.addStretch()
+
+        self.tabs_right.addTab(self.tab_vis, "Vis")
+        self.tabs_right.addTab(self.tab_junc, "Junction")
+        
+        self.right_layout.addWidget(self.tabs_right)
         self.main_layout.addWidget(self.right_panel)
 
     def create_tool_button(self, text, tooltip):
@@ -322,7 +377,6 @@ class CorrelationGui(QMainWindow):
         new_idx = self.current_frame_idx + delta
         if 0 <= new_idx < len(self.frames_list):
             self.current_frame_idx = new_idx
-            
             new_data = self.frames_list[self.current_frame_idx]
             self.layer_sem.set_data(new_data)
             
@@ -341,10 +395,8 @@ class CorrelationGui(QMainWindow):
 
     # --- CÁLCULO DE SCALE BAR AUTOMÁTICO (DINÁMICO CON ZOOM) ---
     def draw_scale_bar(self):
-        """Calcula y dibuja una scale bar anclada a la esquina inferior derecha del FOV visible."""
         if self.width_phys == 0: return
         
-        # Eliminar la barra anterior si ya existía
         if self.scale_bar_line:
             try: self.scale_bar_line.remove()
             except: pass
@@ -352,23 +404,18 @@ class CorrelationGui(QMainWindow):
             try: self.scale_bar_text.remove()
             except: pass
 
-        # Obtener los límites visibles actuales (dependen del zoom)
         xlim = self.ax.get_xlim()
         ylim = self.ax.get_ylim()
         
         vis_width = abs(xlim[1] - xlim[0])
         vis_height = abs(ylim[1] - ylim[0])
         
-        # Buscar que la barra ocupe ~20% del ANCHO VISIBLE
         target_width_phys = vis_width * 0.20
         target_width_m = target_width_phys / self.unit_factor
         
         scales = [
-            (10e-9, "10 nm"),
-            (100e-9, "100 nm"),
-            (1e-6, "1 \u03BCm"), 
-            (10e-6, "10 \u03BCm"),
-            (100e-6, "100 \u03BCm"),
+            (10e-9, "10 nm"), (100e-9, "100 nm"),
+            (1e-6, "1 \u03BCm"), (10e-6, "10 \u03BCm"), (100e-6, "100 \u03BCm"),
             (1e-3, "1 mm")
         ]
         
@@ -377,7 +424,6 @@ class CorrelationGui(QMainWindow):
         self.scale_bar_length_phys = best_scale_m * self.unit_factor
         self.scale_bar_label = best_scale_label
         
-        # Posicionamiento: Esquina inferior derecha de lo que se ve AHORA MISMO
         margin_x = vis_width * 0.05
         margin_y = vis_height * 0.05
         
@@ -385,11 +431,8 @@ class CorrelationGui(QMainWindow):
         x0 = x1 - self.scale_bar_length_phys
         y0 = min(ylim) + margin_y 
         
-        # Dibujar la línea verde
         self.scale_bar_line = Line2D([x0, x1], [y0, y0], color='#00FF00', linewidth=1)
         self.ax.add_line(self.scale_bar_line)
-        
-        # Añadir el texto ligeramente POR ENCIMA de la línea
         self.scale_bar_text = self.ax.text(x0 + self.scale_bar_length_phys/2, y0 + (vis_height*0.02), 
                                            self.scale_bar_label, color='#00FF00', fontsize=11, 
                                            fontweight='normal', ha='center', va='bottom')
@@ -412,9 +455,7 @@ class CorrelationGui(QMainWindow):
             elif content_type == "ebic" and file_format == "csv":
                 if self.data_manager.current_map is not None:
                     np.savetxt(file_path, self.data_manager.current_map, delimiter=",")
-                else:
-                    self.status_bar.showMessage("Error: No hay datos EBIC disponibles.", 3000)
-                    return
+                else: return
 
             elif content_type == "sem" and file_format in ["tif", "png"]:
                 mpimg.imsave(file_path, self.data_manager.sem_data, cmap='gray')
@@ -422,15 +463,12 @@ class CorrelationGui(QMainWindow):
             elif content_type == "ebic_img" and file_format in ["tif", "png"]:
                 if self.data_manager.current_map is not None:
                     mpimg.imsave(file_path, self.data_manager.current_map, cmap=self.current_cmap)
-                else:
-                    self.status_bar.showMessage("Error: No hay datos EBIC disponibles.", 3000)
-                    return
+                else: return
 
             elif content_type == "screen":
                 self.fig.savefig(file_path, format=file_format, bbox_inches='tight')
 
             elif content_type == "overlay":
-                # Nota: la exportación de "overlay" siempre guarda la imagen COMPLETA (sin zoom)
                 temp_fig = Figure(figsize=(self.img_width/100, self.img_height/100), dpi=100)
                 temp_ax = temp_fig.add_subplot(111)
                 temp_ax.axis('off') 
@@ -444,34 +482,31 @@ class CorrelationGui(QMainWindow):
                                    vmin=np.nanmin(self.data_manager.current_map), 
                                    vmax=np.nanmax(self.data_manager.current_map))
                 
-                # Calcular barra de escala expresamente para la imagen completa
-                target_m = (self.width_phys / self.unit_factor) * 0.20
-                scales = [(10e-9, "10 nm"), (100e-9, "100 nm"), (1e-6, "1 \u03BCm"), (10e-6, "10 \u03BCm"), (100e-6, "100 \u03BCm"), (1e-3, "1 mm")]
-                best_m, best_lbl = min(scales, key=lambda x: abs(x[0] - target_m))
-                sb_len_phys = best_m * self.unit_factor
-                
-                margin_x = self.width_phys * 0.05
-                margin_y = self.height_phys * 0.05
-                x1 = self.width_phys - margin_x
-                x0 = x1 - sb_len_phys
-                y0 = margin_y 
-                
-                temp_ax.add_line(Line2D([x0, x1], [y0, y0], color='#00FF00', linewidth=1))
-                temp_ax.text(x0 + sb_len_phys/2, y0 + (self.height_phys*0.02), 
-                             best_lbl, color='#00FF00', fontsize=14, 
-                             fontweight='normal', ha='center', va='bottom')
+                if self.scale_bar_length_phys:
+                    target_m = (self.width_phys / self.unit_factor) * 0.20
+                    scales = [(10e-9, "10 nm"), (100e-9, "100 nm"), (1e-6, "1 \u03BCm"), (10e-6, "10 \u03BCm"), (100e-6, "100 \u03BCm"), (1e-3, "1 mm")]
+                    best_m, best_lbl = min(scales, key=lambda x: abs(x[0] - target_m))
+                    sb_len_phys = best_m * self.unit_factor
+                    
+                    margin_x = self.width_phys * 0.05
+                    margin_y = self.height_phys * 0.05
+                    x1 = self.width_phys - margin_x
+                    x0 = x1 - sb_len_phys
+                    y0 = margin_y 
+                    
+                    temp_ax.add_line(Line2D([x0, x1], [y0, y0], color='#00FF00', linewidth=1))
+                    temp_ax.text(x0 + sb_len_phys/2, y0 + (self.height_phys*0.02), 
+                                 best_lbl, color='#00FF00', fontsize=14, 
+                                 fontweight='normal', ha='center', va='bottom')
                 
                 temp_fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
                 temp_fig.savefig(file_path, format=file_format, pad_inches=0)
 
             self.status_bar.showMessage(f"Guardado exitosamente en: {file_path}", 5000)
 
-        except Exception as e:
-            self.status_bar.showMessage(f"Error al guardar: {str(e)}", 5000)
-            print(f"Excepción al guardar: {e}")
+        except Exception as e: print(e)
 
     # --------------------------------------------------------
-
     def reset_entire_state(self):
         self.layer_sem = None
         self.layer_ebic = None
@@ -482,6 +517,10 @@ class CorrelationGui(QMainWindow):
 
         self.stored_lines = []
         self.current_line_artist = None
+        if self.junction_line_artist:
+            try: self.junction_line_artist.remove()
+            except: pass
+            self.junction_line_artist = None
         
         self.scale_bar_length_phys = None
         self.scale_bar_label = None
@@ -529,7 +568,6 @@ class CorrelationGui(QMainWindow):
         self.current_frame_idx = 0
         self.update_frame_ui()
         
-        # --- DECISIÓN INTELIGENTE DE UNIDADES ---
         px_size = self.data_manager.pixel_size if self.data_manager.pixel_size > 0 else 1e-6
         fov_m = px_size * self.img_width
         
@@ -550,11 +588,7 @@ class CorrelationGui(QMainWindow):
         extent_physical = [0, self.width_phys, 0, self.height_phys]
 
         base_data = self.frames_list[0] if self.frames_list else np.zeros((self.img_height, self.img_width))
-        self.layer_sem = self.ax.imshow(base_data, 
-                                        cmap='gray', 
-                                        interpolation='nearest',
-                                        aspect='equal',
-                                        extent=extent_physical)
+        self.layer_sem = self.ax.imshow(base_data, cmap='gray', interpolation='nearest', aspect='equal', extent=extent_physical)
         
         vmin = np.nanmin(base_data)
         vmax = np.nanmax(base_data)
@@ -565,37 +599,136 @@ class CorrelationGui(QMainWindow):
             vmin = np.nanmin(data_ebic)
             vmax = np.nanmax(data_ebic)
 
-            self.layer_ebic = self.ax.imshow(data_ebic,
-                                             cmap=self.current_cmap,
-                                             alpha=self.opacity, 
-                                             interpolation='nearest',
-                                             aspect='equal',
-                                             extent=extent_physical,
+            self.layer_ebic = self.ax.imshow(data_ebic, cmap=self.current_cmap, alpha=self.opacity, 
+                                             interpolation='nearest', aspect='equal', extent=extent_physical,
                                              vmin=vmin, vmax=vmax)
-            
             self.cbar = self.fig.colorbar(self.layer_ebic, ax=self.ax, fraction=0.046, pad=0.04)
             self.cbar.set_label('Corriente (nA)', rotation=270, labelpad=15)
-            
             self.layer_ebic.set_visible(False)
             self.cbar.ax.set_visible(False)
         
-        # Etiquetar los ejes dinámicamente
         self.ax.set_xlabel(f"Distancia ({self.unit_label})")
         self.ax.set_ylabel(f"Distancia ({self.unit_label})")
         self.ax.set_title("Vista SEM (Frame 0)")
-
-        # Aplicar grid si estaba activo
         self.ax.grid(self.btn_grid.isChecked())
         
-        # Forzar los límites antes de dibujar la escala por primera vez
         self.ax.set_xlim(0, self.width_phys)
         self.ax.set_ylim(0, self.height_phys)
         
         self.draw_scale_bar()
         self.canvas.draw()
 
-    # --- ACCIONES ---
+    # --- JUNCTION DETECTION FUNCIONALIDAD ---
+    def run_junction_detection(self):
+        if self.data_manager.sem_data is None:
+            QMessageBox.warning(self, "Error", "No hay imagen SEM cargada.")
+            return
+            
+        if len(self.stored_lines) != 1:
+            QMessageBox.warning(self, "Error", "Por favor, dibuja exactamente UNA línea en la imagen.")
+            return
 
+        # 1. Obtener coordenadas físicas de la línea
+        line = self.stored_lines[0]
+        xdata, ydata = line.get_data()
+        x0_phys, y0_phys = xdata[0], ydata[0]
+        x1_phys, y1_phys = xdata[1], ydata[1]
+
+        # 2. Convertir a píxeles
+        c0 = x0_phys / self.pixel_size_phys
+        r0 = (self.height_phys - y0_phys) / self.pixel_size_phys
+        c1 = x1_phys / self.pixel_size_phys
+        r1 = (self.height_phys - y1_phys) / self.pixel_size_phys
+
+        # Vector de la línea
+        v_c = c1 - c0
+        v_r = r1 - r0
+        L_px = np.sqrt(v_c**2 + v_r**2)
+        
+        if L_px == 0:
+            QMessageBox.warning(self, "Error", "La línea dibujada es muy corta.")
+            return
+
+        u_c = v_c / L_px
+        u_r = v_r / L_px
+        
+        # Vector Normal
+        n_c = -u_r
+        n_r = u_c
+
+        # 3. Tamaño de la ROI en píxeles
+        half_width_um = self.spin_hw.value()
+        half_width_m = half_width_um * 1e-6
+        pixel_size_m = self.data_manager.pixel_size if self.data_manager.pixel_size > 0 else 1e-6
+        HW_px = int(np.ceil(half_width_m / pixel_size_m))
+        
+        W = int(np.ceil(L_px))
+        H = 2 * HW_px + 1
+
+        # 4. Meshgrid de coordenadas para la extracción (map_coordinates)
+        # cols = x, rows = y
+        c_grid = c0 + u_c * np.arange(W).reshape(1, W) + n_c * (np.arange(H) - HW_px).reshape(H, 1)
+        r_grid = r0 + u_r * np.arange(W).reshape(1, W) + n_r * (np.arange(H) - HW_px).reshape(H, 1)
+
+        # 5. Extraer matrices
+        sem_data_float = self.data_manager.sem_data.astype(float)
+        roi_sem = ndi.map_coordinates(sem_data_float, [r_grid, c_grid], order=1, mode='nearest')
+        
+        roi_ebic = None
+        if self.data_manager.current_map is not None:
+            ebic_data_float = self.data_manager.current_map.astype(float)
+            roi_ebic = ndi.map_coordinates(ebic_data_float, [r_grid, c_grid], order=1, mode='nearest')
+
+        # La línea manual en "coordenadas imagen de la ROI" es el centro a lo largo de W
+        # El JunctionAnalyzer espera la línea en PIXELES.
+        manual_line_px = np.column_stack([c0 + u_c * np.arange(W), r0 + u_r * np.arange(W)])
+
+        # 6. Analizar
+        analyzer = JunctionAnalyzer(pixel_size_m=pixel_size_m)
+        results = analyzer.detect(
+            roi_sem, 
+            manual_line_px, 
+            roi_current=roi_ebic, 
+            weight_current=10.0,
+            plot_a=self.chk_a.isChecked(),
+            plot_b=self.chk_b.isChecked(),
+            plot_c=self.chk_c.isChecked()
+        )
+
+        if not results:
+            QMessageBox.warning(self, "Error", "Fallo durante la detección.")
+            return
+
+        name, detected_coords_px, metrics = results[0]
+
+        # 7. Visualizar en el Analyzer (General image figure si está marcado)
+        if self.chk_d.isChecked():
+            analyzer.visualize_results(self.data_manager.sem_data, manual_line_px, results)
+
+        # 8. Observar Junction directamente en la GUI
+        if self.chk_e.isChecked() and detected_coords_px is not None:
+            # Borrar la línea manual roja
+            self.stored_lines[0].remove()
+            self.stored_lines.clear()
+            
+            # Borrar previa green line si la hubiera
+            if self.junction_line_artist:
+                try: self.junction_line_artist.remove()
+                except: pass
+            
+            # Convertir las coordenadas de píxel encontradas a coordenadas Físicas GUI
+            phys_x = detected_coords_px[:, 0] * self.pixel_size_phys
+            phys_y = self.height_phys - (detected_coords_px[:, 1] * self.pixel_size_phys)
+            
+            # Añadir línea verde final en la GUI
+            self.junction_line_artist = Line2D(phys_x, phys_y, color='#00FF00', linewidth=2.5)
+            self.ax.add_line(self.junction_line_artist)
+            self.canvas.draw()
+            
+            msg = f"Junction detectada.\nMedia Dev: {metrics[0]:.2f} µm\nStd Dev: {metrics[1]:.2f} µm"
+            self.status_bar.showMessage(msg, 10000)
+
+    # --- ACCIONES ---
     def action_home_reset(self):
         if self.width_phys == 0: return 
 
@@ -605,11 +738,17 @@ class CorrelationGui(QMainWindow):
         for line in self.stored_lines:
             line.remove()
         self.stored_lines.clear()
+        
+        if self.junction_line_artist:
+            try: self.junction_line_artist.remove()
+            except: pass
+            self.junction_line_artist = None
+            
         self.current_line_artist = None
         self.line_start_point = None
 
         self.set_mode("view")
-        self.draw_scale_bar() # Reajustar la barra de nuevo
+        self.draw_scale_bar()
         self.canvas.draw()
 
     def toggle_grid(self):
@@ -640,7 +779,6 @@ class CorrelationGui(QMainWindow):
             self.canvas.draw()
 
     # --- EVENTOS RATÓN ---
-
     def on_mouse_press(self, event):
         if event.inaxes != self.ax: return
         try:
@@ -648,6 +786,11 @@ class CorrelationGui(QMainWindow):
                 self.pan_start = (event.xdata, event.ydata)
                 self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
             elif self.mode == 'line':
+                # Si hay otra línea la quitamos para que solo haya 1
+                if len(self.stored_lines) >= 1:
+                    for l in self.stored_lines: l.remove()
+                    self.stored_lines.clear()
+                    
                 self.line_start_point = (event.xdata, event.ydata)
                 self.current_line_artist = Line2D([event.xdata, event.xdata], 
                                                   [event.ydata, event.ydata], 
@@ -677,8 +820,7 @@ class CorrelationGui(QMainWindow):
                 px_x = max(0, min(px_x, self.img_width - 1))
                 px_y = max(0, min(px_y, self.img_height - 1))
                 
-                txt = f"X (px): {px_x}, Y (px): {px_y}"
-                self.lbl_coords.setText(txt)
+                self.lbl_coords.setText(f"X (px): {px_x}, Y (px): {px_y}")
             else:
                 self.lbl_coords.setText("Coordenadas (Px): - , -")
                 return
@@ -690,21 +832,15 @@ class CorrelationGui(QMainWindow):
                 new_xlim = [self.ax.get_xlim()[0] - dx, self.ax.get_xlim()[1] - dx]
                 new_ylim = [self.ax.get_ylim()[0] - dy, self.ax.get_ylim()[1] - dy]
 
-                # Constreñir Pan a los límites de la imagen
-                if new_xlim[0] < 0:
-                    new_xlim = [0, new_xlim[1] - new_xlim[0]]
-                elif new_xlim[1] > self.width_phys:
-                    new_xlim = [self.width_phys - (new_xlim[1] - new_xlim[0]), self.width_phys]
+                if new_xlim[0] < 0: new_xlim = [0, new_xlim[1] - new_xlim[0]]
+                elif new_xlim[1] > self.width_phys: new_xlim = [self.width_phys - (new_xlim[1] - new_xlim[0]), self.width_phys]
                     
-                if new_ylim[0] < 0:
-                    new_ylim = [0, new_ylim[1] - new_ylim[0]]
-                elif new_ylim[1] > self.height_phys:
-                    new_ylim = [self.height_phys - (new_ylim[1] - new_ylim[0]), self.height_phys]
+                if new_ylim[0] < 0: new_ylim = [0, new_ylim[1] - new_ylim[0]]
+                elif new_ylim[1] > self.height_phys: new_ylim = [self.height_phys - (new_ylim[1] - new_ylim[0]), self.height_phys]
 
                 self.ax.set_xlim(new_xlim)
                 self.ax.set_ylim(new_ylim)
-                
-                self.draw_scale_bar() # Redibujar la barra para que persiga a la esquina
+                self.draw_scale_bar()
                 self.canvas.draw()
                 
             elif self.mode == 'line' and self.line_start_point and self.current_line_artist:
@@ -733,15 +869,11 @@ class CorrelationGui(QMainWindow):
             new_xlim = [xdata - new_width * (1 - relx), xdata + new_width * relx]
             new_ylim = [ydata - new_height * (1 - rely), ydata + new_height * rely]
 
-            # Constreñir Zoom Out a los límites máximos de la imagen
-            if new_xlim[0] < 0 or new_xlim[1] > self.width_phys:
-                new_xlim = [0, self.width_phys]
-            if new_ylim[0] < 0 or new_ylim[1] > self.height_phys:
-                new_ylim = [0, self.height_phys]
+            if new_xlim[0] < 0 or new_xlim[1] > self.width_phys: new_xlim = [0, self.width_phys]
+            if new_ylim[0] < 0 or new_ylim[1] > self.height_phys: new_ylim = [0, self.height_phys]
 
             self.ax.set_xlim(new_xlim)
             self.ax.set_ylim(new_ylim)
-            
-            self.draw_scale_bar() # Adaptar la barra al nuevo nivel de zoom
+            self.draw_scale_bar()
             self.canvas.draw()
         except: pass
