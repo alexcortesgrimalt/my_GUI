@@ -150,6 +150,10 @@ class CorrelationGui(QMainWindow):
         self.btn_line.setCheckable(True)
         self.btn_line.clicked.connect(lambda: self.set_mode("line"))
         
+        self.btn_grid = self.create_tool_button("▦", "Activar/Desactivar Grid")
+        self.btn_grid.setCheckable(True)
+        self.btn_grid.clicked.connect(self.toggle_grid)
+        
         self.btn_overlay = self.create_tool_button("OL", "Activar Overlay")
         self.btn_overlay.setCheckable(True)
         self.btn_overlay.setStyleSheet("QPushButton { font-weight: bold; color: purple; }")
@@ -162,6 +166,7 @@ class CorrelationGui(QMainWindow):
         self.tools_layout.addWidget(self.btn_home)
         self.tools_layout.addWidget(self.btn_pan)
         self.tools_layout.addWidget(self.btn_line)
+        self.tools_layout.addWidget(self.btn_grid)
         self.tools_layout.addSpacing(20)
         self.tools_layout.addWidget(self.btn_overlay)
         self.tools_layout.addStretch() 
@@ -475,6 +480,10 @@ class CorrelationGui(QMainWindow):
         self.btn_overlay.blockSignals(True)
         self.btn_overlay.setChecked(False)
         self.btn_overlay.blockSignals(False)
+
+        self.btn_grid.blockSignals(True)
+        self.btn_grid.setChecked(False)
+        self.btn_grid.blockSignals(False)
         
         self.tool_group.setExclusive(False)
         self.btn_pan.setChecked(False)
@@ -551,6 +560,9 @@ class CorrelationGui(QMainWindow):
         self.ax.set_xlabel(f"Distancia ({self.unit_label})")
         self.ax.set_ylabel(f"Distancia ({self.unit_label})")
         self.ax.set_title("Vista SEM (Frame 0)")
+
+        # Aplicar grid si estaba activo
+        self.ax.grid(self.btn_grid.isChecked())
         
         self.draw_scale_bar()
         self.canvas.draw()
@@ -571,6 +583,11 @@ class CorrelationGui(QMainWindow):
 
         self.set_mode("view")
         self.canvas.draw()
+
+    def toggle_grid(self):
+        if self.width_phys > 0:
+            self.ax.grid(self.btn_grid.isChecked())
+            self.canvas.draw()
 
     def toggle_overlay(self):
         self.show_overlay = self.btn_overlay.isChecked()
@@ -641,9 +658,25 @@ class CorrelationGui(QMainWindow):
             if self.mode == 'pan' and self.pan_start:
                 dx = event.xdata - self.pan_start[0]
                 dy = event.ydata - self.pan_start[1]
-                self.ax.set_xlim(self.ax.get_xlim() - dx)
-                self.ax.set_ylim(self.ax.get_ylim() - dy)
+                
+                new_xlim = [self.ax.get_xlim()[0] - dx, self.ax.get_xlim()[1] - dx]
+                new_ylim = [self.ax.get_ylim()[0] - dy, self.ax.get_ylim()[1] - dy]
+
+                # Constreñir Pan a los límites de la imagen
+                if new_xlim[0] < 0:
+                    new_xlim = [0, new_xlim[1] - new_xlim[0]]
+                elif new_xlim[1] > self.width_phys:
+                    new_xlim = [self.width_phys - (new_xlim[1] - new_xlim[0]), self.width_phys]
+                    
+                if new_ylim[0] < 0:
+                    new_ylim = [0, new_ylim[1] - new_ylim[0]]
+                elif new_ylim[1] > self.height_phys:
+                    new_ylim = [self.height_phys - (new_ylim[1] - new_ylim[0]), self.height_phys]
+
+                self.ax.set_xlim(new_xlim)
+                self.ax.set_ylim(new_ylim)
                 self.canvas.draw()
+                
             elif self.mode == 'line' and self.line_start_point and self.current_line_artist:
                 self.current_line_artist.set_data([self.line_start_point[0], event.xdata], 
                                                   [self.line_start_point[1], event.ydata])
@@ -658,17 +691,25 @@ class CorrelationGui(QMainWindow):
             cur_xlim = self.ax.get_xlim()
             cur_ylim = self.ax.get_ylim()
             xdata, ydata = event.xdata, event.ydata
+            
             scale_factor = 1/base_scale if event.button == 'up' else base_scale
             
             new_width = (cur_xlim[1] - cur_xlim[0]) * scale_factor
             new_height = (cur_ylim[1] - cur_ylim[0]) * scale_factor
             
-            if new_width > self.width_phys * 3: return
-
             relx = (cur_xlim[1] - xdata) / (cur_xlim[1] - cur_xlim[0])
             rely = (cur_ylim[1] - ydata) / (cur_ylim[1] - cur_ylim[0])
             
-            self.ax.set_xlim([xdata - new_width * (1 - relx), xdata + new_width * relx])
-            self.ax.set_ylim([ydata - new_height * (1 - rely), ydata + new_height * rely])
+            new_xlim = [xdata - new_width * (1 - relx), xdata + new_width * relx]
+            new_ylim = [ydata - new_height * (1 - rely), ydata + new_height * rely]
+
+            # Constreñir Zoom Out a los límites máximos de la imagen
+            if new_xlim[0] < 0 or new_xlim[1] > self.width_phys:
+                new_xlim = [0, self.width_phys]
+            if new_ylim[0] < 0 or new_ylim[1] > self.height_phys:
+                new_ylim = [0, self.height_phys]
+
+            self.ax.set_xlim(new_xlim)
+            self.ax.set_ylim(new_ylim)
             self.canvas.draw()
         except: pass
