@@ -1,6 +1,8 @@
 import numpy as np
 import cv2
-import matplotlib as mpl
+import matplotlib.pyplot as plt
+from matplotlib.backend_bases import NavigationToolbar2
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.interpolate import interp1d, splrep, splev
 from scipy.stats import pearsonr
 
@@ -8,6 +10,27 @@ class JunctionAnalyzer:
 
     def __init__(self, pixel_size_m):
         self.pixel_size_m = pixel_size_m  # meters per pixel
+        self._setup_plot_style()
+
+    def _setup_plot_style(self):
+        """Aplica configuraciones globales para que las figuras se vean profesionales y restringe la toolbar."""
+        plt.rcParams.update({
+            'font.family': 'sans-serif',
+            'font.size': 11,
+            'axes.labelsize': 12,
+            'axes.titlesize': 13,
+            'axes.titleweight': 'bold',
+            'axes.spines.top': False,
+            'axes.spines.right': False,
+            'lines.linewidth': 2,
+            'legend.framealpha': 0.9,
+            'legend.edgecolor': '#cccccc'
+        })
+
+        # --- RESTRICCIÓN DE LA BARRA DE HERRAMIENTAS ---
+        NavigationToolbar2.toolitems = (
+            ('Save', 'Save the figure', 'filesave', 'save_figure'),
+        )
 
     def detect(self, roi, manual_line, roi_current=None, weight_current=10.0, 
                plot_a=False, plot_b=False, plot_c=False, sweep_weights=None, _sweep_call=False):
@@ -23,23 +46,49 @@ class JunctionAnalyzer:
         else:
             manual_line_rs = np.array(manual_line, dtype=float)
 
-        # Plot (A)
+        # -----------------------------------------------------------------
+        # Plot (A): SEM ROI - EBIC / Current ROI
+        # -----------------------------------------------------------------
         if plot_a:
             try:
-                import matplotlib.pyplot as plt
                 if roi_current is not None:
-                    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-                    axes[0].imshow(roi, cmap='gray', origin='upper')
-                    axes[0].set_title('SEM ROI')
-                    axes[1].imshow(roi_current, cmap='viridis', origin='upper')
+                    # Orientación dinámica basada en la relación de aspecto de la ROI
+                    if w > h:
+                        fig, axes = plt.subplots(2, 1, figsize=(10, 8)) # Uno encima de otro
+                    else:
+                        fig, axes = plt.subplots(1, 2, figsize=(14, 5)) # Uno al lado del otro
+                    
+                    # SEM
+                    im0 = axes[0].imshow(roi, cmap='gray', origin='upper', aspect='equal')
+                    axes[0].set_title('SEM ROI (Topography)')
+                    axes[0].set_xlabel('Width (pixels)')
+                    axes[0].set_ylabel('Height (pixels)')
+                    div0 = make_axes_locatable(axes[0])
+                    cax0 = div0.append_axes("right", size="3%", pad=0.1)
+                    fig.colorbar(im0, cax=cax0).set_label('Intensity')
+                    
+                    # EBIC
+                    im1 = axes[1].imshow(roi_current, cmap='viridis', origin='upper', aspect='equal')
                     axes[1].set_title('EBIC / Current ROI')
+                    axes[1].set_xlabel('Width (pixels)')
+                    axes[1].set_ylabel('Height (pixels)')
+                    div1 = make_axes_locatable(axes[1])
+                    cax1 = div1.append_axes("right", size="3%", pad=0.1)
+                    fig.colorbar(im1, cax=cax1).set_label('Current (nA)')
                 else:
-                    fig, ax = plt.subplots(1, 1, figsize=(5, 4))
-                    ax.imshow(roi, cmap='gray', origin='upper')
-                    ax.set_title('SEM ROI')
-                plt.tight_layout()
-                plt.show()
-            except Exception: pass
+                    fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+                    im = ax.imshow(roi, cmap='gray', origin='upper', aspect='equal')
+                    ax.set_title('SEM ROI (Topography)')
+                    ax.set_xlabel('Width (pixels)')
+                    ax.set_ylabel('Height (pixels)')
+                    div = make_axes_locatable(ax)
+                    cax = div.append_axes("right", size="3%", pad=0.1)
+                    fig.colorbar(im, cax=cax).set_label('Intensity')
+                
+                fig.suptitle("Region of Interest (ROI) Extraction (1:1 Aspect Ratio)", fontsize=15, y=0.98)
+                fig.tight_layout()
+                fig.show() 
+            except Exception as e: print(e)
 
         results = []
 
@@ -53,8 +102,8 @@ class JunctionAnalyzer:
                 except Exception:
                     filtered_current = roi_current.astype(np.uint8)
 
-            # Pass plot_b as debug flag for inner methods
-            detected_roi_coords = self._detect_junction_canny(filtered_roi, roi_current=filtered_current, weight_current=weight_current, debug=plot_b)
+            detected_roi_coords = self._detect_junction_canny(filtered_roi, roi_current=filtered_current, weight_current=weight_current)
+            
             if detected_roi_coords.shape[0] != w:
                 t_det = np.linspace(0.0, 1.0, detected_roi_coords.shape[0])
                 t_new = np.linspace(0.0, 1.0, w)
@@ -67,34 +116,35 @@ class JunctionAnalyzer:
             detected_image_coords = self._map_detected_to_image_coords(manual_line_rs, postprocessed_roi_coords, roi_height=h)
             metrics = self._compare_with_manual(manual_line_rs, detected_image_coords)
             
-            # Plot (B)
+            # -----------------------------------------------------------------
+            # Plot (B): Junction Detection Comparison
+            # -----------------------------------------------------------------
             if plot_b:
                 try:
-                    import matplotlib.pyplot as plt
-                    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
-                    ax.imshow(filtered_roi, cmap='gray', origin='upper')
+                    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+                    ax.imshow(filtered_roi, cmap='gray', origin='upper', aspect='equal')
                     
                     manual_roi_y = (h - 1) / 2.0
-                    ax.axhline(y=manual_roi_y, color='green', linestyle='--', linewidth=1.5, label='manual line center', alpha=0.7)
+                    ax.axhline(y=manual_roi_y, color='#00FF00', linestyle='--', linewidth=2, label='Manual reference (Center)', alpha=0.8)
                     
                     if filtered_current is not None:
-                        detected_sem_only = self._detect_junction_canny(filtered_roi, roi_current=filtered_current, weight_current=0.0, debug=False)
+                        detected_sem_only = self._detect_junction_canny(filtered_roi, roi_current=filtered_current, weight_current=0.0)
                         postproc_sem = self._fit_line_postprocessing(detected_sem_only)
-                        ax.plot(postproc_sem[:, 0], postproc_sem[:, 1], 'b-', linewidth=1.5, label='SEM only (w=0)', alpha=0.8)
+                        ax.plot(postproc_sem[:, 0], postproc_sem[:, 1], color='#1f77b4', linestyle='-', linewidth=2, label='SEM only (w=0)', alpha=0.9)
                         
-                        detected_ebic_only = self._detect_junction_canny(filtered_roi, roi_current=filtered_current, weight_current=1e6, debug=False)
+                        detected_ebic_only = self._detect_junction_canny(filtered_roi, roi_current=filtered_current, weight_current=1e6)
                         postproc_ebic = self._fit_line_postprocessing(detected_ebic_only)
-                        ax.plot(postproc_ebic[:, 0], postproc_ebic[:, 1], 'orange', linewidth=1.5, label='EBIC only (w=1e6)', alpha=0.8)
+                        ax.plot(postproc_ebic[:, 0], postproc_ebic[:, 1], color='#ff7f0e', linestyle='-', linewidth=2, label='EBIC only (w=1e6)', alpha=0.9)
                     
-                    ax.plot(detected_roi_coords[:, 0], detected_roi_coords[:, 1], 'y.', markersize=3, label=f'combined raw (w={weight_current})', alpha=0.6)
-                    ax.plot(postprocessed_roi_coords[:, 0], postprocessed_roi_coords[:, 1], 'r-', linewidth=2, label=f'combined fit (w={weight_current})')
+                    ax.plot(detected_roi_coords[:, 0], detected_roi_coords[:, 1], 'y.', markersize=4, label=f'Raw Detections (w={weight_current})', alpha=0.7)
+                    ax.plot(postprocessed_roi_coords[:, 0], postprocessed_roi_coords[:, 1], color='#d62728', linestyle='-', linewidth=2.5, label=f'Combined Fit (w={weight_current})')
                     
                     try:
                         roi8 = filtered_roi if filtered_roi.dtype == np.uint8 else cv2.normalize(filtered_roi, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
                         otsu_r, _ = cv2.threshold(roi8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                         edges_sem = cv2.Canny(roi8, 0.5 * float(otsu_r), float(otsu_r))
                         ys_sem, xs_sem = np.where(edges_sem > 0)
-                        if ys_sem.size > 0: ax.scatter(xs_sem, ys_sem, s=1, c='magenta', label='SEM Canny', alpha=0.3)
+                        if ys_sem.size > 0: ax.scatter(xs_sem, ys_sem, s=2, c='magenta', label='SEM Edges', alpha=0.4)
                     except Exception: pass
                     
                     if filtered_current is not None:
@@ -103,43 +153,67 @@ class JunctionAnalyzer:
                             otsu_c, _ = cv2.threshold(roi_curr8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                             edges_curr = cv2.Canny(roi_curr8, 0.5 * float(otsu_c), float(otsu_c))
                             ys_c, xs_c = np.where(edges_curr > 0)
-                            if ys_c.size > 0: ax.scatter(xs_c, ys_c, s=1, c='cyan', label='EBIC Canny', alpha=0.4)
+                            if ys_c.size > 0: ax.scatter(xs_c, ys_c, s=2, c='cyan', label='EBIC Edges', alpha=0.6)
                         except Exception: pass
 
-                    ax.set_title(f'Junction Detection Comparison (EBIC weight={weight_current})')
-                    ax.legend(loc='best', fontsize='small')
-                    plt.tight_layout()
-                    plt.show()
-                except Exception: pass
+                    ax.set_title(f'Junction Detection Profile Analysis (1:1 Aspect Ratio)', pad=15)
+                    ax.set_xlabel('ROI Width (pixels)')
+                    ax.set_ylabel('ROI Height (pixels)')
+                    ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5), fontsize='small')
+                    fig.tight_layout()
+                    fig.show()
+                except Exception as e: print(e)
 
-            # Plot (C)
+            # -----------------------------------------------------------------
+            # Plot (C): Raw vs Filtered EBIC
+            # -----------------------------------------------------------------
             if plot_c and roi_current is not None:
                 try:
-                    import matplotlib.pyplot as plt
-                    fig2, axes2 = plt.subplots(1, 2, figsize=(10, 4))
-                    axes2[0].imshow(roi_current, cmap='viridis', origin='upper')
-                    axes2[0].set_title('Raw EBIC / Current ROI')
+                    # Orientación dinámica basada en la relación de aspecto de la ROI
+                    if w > h:
+                        fig2, axes2 = plt.subplots(2, 1, figsize=(10, 8)) # Uno encima de otro
+                    else:
+                        fig2, axes2 = plt.subplots(1, 2, figsize=(14, 5)) # Uno al lado del otro
+                    
+                    im0 = axes2[0].imshow(roi_current, cmap='viridis', origin='upper', aspect='equal')
+                    axes2[0].set_title('Raw EBIC ROI')
+                    axes2[0].set_xlabel('Width (pixels)')
+                    axes2[0].set_ylabel('Height (pixels)')
+                    div0 = make_axes_locatable(axes2[0])
+                    cax0 = div0.append_axes("right", size="3%", pad=0.1)
+                    fig2.colorbar(im0, cax=cax0).set_label('Current (nA)')
+
                     try:
                         roi_curr8_raw = roi_current if roi_current.dtype == np.uint8 else cv2.normalize(roi_current, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
                         otsu_cr, _ = cv2.threshold(roi_curr8_raw, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                         edges_curr_raw = cv2.Canny(roi_curr8_raw, 0.5 * float(otsu_cr), float(otsu_cr))
                         ys_c, xs_c = np.where(edges_curr_raw > 0)
-                        if ys_c.size > 0: axes2[0].scatter(xs_c, ys_c, s=1, c='magenta', label='EBIC Canny')
+                        if ys_c.size > 0: axes2[0].scatter(xs_c, ys_c, s=1.5, c='magenta', label='Canny Edges', alpha=0.7)
+                        axes2[0].legend(loc='lower right', fontsize='small')
                     except Exception: pass
 
                     if filtered_current is not None:
-                        axes2[1].imshow(filtered_current, cmap='viridis', origin='upper')
-                        axes2[1].set_title('Filtered EBIC / Current ROI')
+                        im1 = axes2[1].imshow(filtered_current, cmap='viridis', origin='upper', aspect='equal')
+                        axes2[1].set_title('Bilateral Filtered EBIC ROI')
+                        axes2[1].set_xlabel('Width (pixels)')
+                        axes2[1].set_ylabel('Height (pixels)')
+                        div1 = make_axes_locatable(axes2[1])
+                        cax1 = div1.append_axes("right", size="3%", pad=0.1)
+                        fig2.colorbar(im1, cax=cax1).set_label('Current (nA)')
+                        
                         try:
                             roi_curr8 = filtered_current if filtered_current.dtype == np.uint8 else cv2.normalize(filtered_current, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
                             otsu_cc, _ = cv2.threshold(roi_curr8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
                             edges_curr = cv2.Canny(roi_curr8, 0.5 * float(otsu_cc), float(otsu_cc))
                             ys2, xs2 = np.where(edges_curr > 0)
-                            if ys2.size > 0: axes2[1].scatter(xs2, ys2, s=1, c='magenta')
+                            if ys2.size > 0: axes2[1].scatter(xs2, ys2, s=1.5, c='magenta', label='Canny Edges', alpha=0.7)
+                            axes2[1].legend(loc='lower right', fontsize='small')
                         except Exception: pass
-                    plt.tight_layout()
-                    plt.show()
-                except Exception: pass
+                        
+                    fig2.suptitle("Filtering Effect on EBIC Signal (1:1 Aspect Ratio)", fontsize=15, y=0.98)
+                    fig2.tight_layout()
+                    fig2.show()
+                except Exception as e: print(e)
 
             results.append(("Canny (Filtered, Spline)", detected_image_coords, metrics))
         except Exception as e:
@@ -302,7 +376,7 @@ class JunctionAnalyzer:
         return mean_dev, std_dev, max_dev
 
     def visualize_results(self, image, manual_line, results):
-        import matplotlib.pyplot as plt
+        """ Plot (D): General Result Over Main Image """
         for name, line_imgcoords, metrics in results:
             if len(metrics) == 4:
                 mean_dev, std_dev, max_dev, r2 = metrics
@@ -310,13 +384,26 @@ class JunctionAnalyzer:
                 mean_dev, std_dev, max_dev = metrics
                 r2 = float('nan')
 
-            fig, ax = plt.subplots()
-            ax.imshow(image, cmap='gray', origin='upper')
-            ax.plot(manual_line[:, 0], manual_line[:, 1], 'r--', label='Manual')
-            ax.plot(line_imgcoords[:, 0], line_imgcoords[:, 1], '-', label=name)
-            ax.set_title(f"{name}\nMean: {mean_dev:.2f} \u03BCm, Std: {std_dev:.2f} \u03BCm, Max: {max_dev:.2f} \u03BCm")
-            ax.legend()
-            plt.show()
+            fig, ax = plt.subplots(figsize=(10, 8))
+            im = ax.imshow(image, cmap='gray', origin='upper', aspect='equal')
+            
+            div = make_axes_locatable(ax)
+            cax = div.append_axes("right", size="3%", pad=0.1)
+            fig.colorbar(im, cax=cax).set_label('Intensity')
+            
+            ax.plot(manual_line[:, 0], manual_line[:, 1], color='#ff7f0e', linestyle='--', linewidth=2, label='Manual Estimation')
+            ax.plot(line_imgcoords[:, 0], line_imgcoords[:, 1], color='#00FF00', linestyle='-', linewidth=2.5, label='Detected Junction')
+            
+            title = (f"General Junction Detection ({name})\n"
+                     f"Mean Deviation: {mean_dev:.2f} \u03BCm | Std Dev: {std_dev:.2f} \u03BCm | Max Dev: {max_dev:.2f} \u03BCm")
+            
+            ax.set_title(title, pad=15)
+            ax.set_xlabel('Width (pixels)')
+            ax.set_ylabel('Height (pixels)')
+            ax.legend(loc='best')
+            fig.tight_layout()
+            
+            fig.show() 
 
     def _fit_line_postprocessing(self, detected_coords):
         x = detected_coords[:, 0]
