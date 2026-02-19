@@ -287,14 +287,19 @@ class CorrelationGui(QMainWindow):
         self.chk_b = QCheckBox("b) Junction Detection Comparison")
         self.chk_c = QCheckBox("c) Raw EBIC & Filtered EBIC")
         self.chk_d = QCheckBox("d) Canny (Filtered, Spline) - General")
-        self.chk_e = QCheckBox("e) Observe Junction (Over Main)")
+        self.chk_e = QCheckBox("e) Draw Detected Junction (Over Main)")
         self.chk_e.setChecked(True) 
         
+        # NUEVO CHECKBOX AÑADIDO: f) Observe Junction Profile
+        self.chk_f = QCheckBox("f) Observe Junction Profile (1D Plot)")
+        self.chk_f.setChecked(False)
+
         junc_layout.addWidget(self.chk_a)
         junc_layout.addWidget(self.chk_b)
         junc_layout.addWidget(self.chk_c)
         junc_layout.addWidget(self.chk_d)
         junc_layout.addWidget(self.chk_e)
+        junc_layout.addWidget(self.chk_f) # Se añade a la UI
         
         junc_layout.addSpacing(15)
         self.btn_run_junction = QPushButton("OK")
@@ -776,6 +781,14 @@ class CorrelationGui(QMainWindow):
 
         if self.chk_d.isChecked():
             analyzer.visualize_results(self.data_manager.sem_data, manual_line_px, results)
+            
+        # NUEVA FUNCIONALIDAD: f) Observe Junction Profile (Llama a tu nuevo método en JunctionAnalyzer)
+        if self.chk_f.isChecked() and detected_coords_px is not None:
+            analyzer.observe_junction(
+                image=self.data_manager.sem_data,
+                detected_coords=detected_coords_px,
+                image_current=self.data_manager.current_map
+            )
 
         if self.chk_e.isChecked() and detected_coords_px is not None:
             self.stored_lines[0].remove()
