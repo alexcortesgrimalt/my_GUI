@@ -89,27 +89,27 @@ class CorrelationGui(QMainWindow):
         toolbar.addAction(upload_action)
 
         save_button = QToolButton()
-        save_button.setText("Save / Export...")
+        save_button.setText("Save")
         save_button.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_DialogSaveButton))
         save_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         save_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         
         save_menu = QMenu()
-        menu_sem = QMenu("Save SEM image", self)
-        menu_sem.addAction("as .tif", lambda: self.save_data("sem", "tif"))
-        menu_sem.addAction("as .png", lambda: self.save_data("sem", "png"))
+        menu_sem = QMenu("Save SEM image as ", self)
+        menu_sem.addAction(".tif", lambda: self.save_data("sem", "tif"))
+        menu_sem.addAction(".png", lambda: self.save_data("sem", "png"))
         save_menu.addMenu(menu_sem)
-        menu_ebic = QMenu("Save Current Map", self)
-        menu_ebic.addAction("as .tif", lambda: self.save_data("ebic_img", "tif"))
-        menu_ebic.addAction("as .png", lambda: self.save_data("ebic_img", "png"))
+        menu_ebic = QMenu("Save Current Map as ", self)
+        menu_ebic.addAction(".tif", lambda: self.save_data("ebic_img", "tif"))
+        menu_ebic.addAction(".png", lambda: self.save_data("ebic_img", "png"))
         save_menu.addMenu(menu_ebic)
-        menu_overlay = QMenu("Save SEM + Current Map", self)
-        menu_overlay.addAction("as .tif", lambda: self.save_data("overlay", "tif"))
-        menu_overlay.addAction("as .png", lambda: self.save_data("overlay", "png"))
+        menu_overlay = QMenu("Save SEM + Current Map as ", self)
+        menu_overlay.addAction(".tif", lambda: self.save_data("overlay", "tif"))
+        menu_overlay.addAction(".png", lambda: self.save_data("overlay", "png"))
         save_menu.addMenu(menu_overlay)
-        menu_screen = QMenu("Save screen", self)
-        menu_screen.addAction("as .tif", lambda: self.save_data("screen", "tif"))
-        menu_screen.addAction("as .png", lambda: self.save_data("screen", "png"))
+        menu_screen = QMenu("Save screen as ", self)
+        menu_screen.addAction(".tif", lambda: self.save_data("screen", "tif"))
+        menu_screen.addAction(".png", lambda: self.save_data("screen", "png"))
         save_menu.addMenu(menu_screen)
         save_menu.addSeparator()
         save_menu.addAction("Save SEM map (.csv)", lambda: self.save_data("sem", "csv"))
@@ -187,11 +187,11 @@ class CorrelationGui(QMainWindow):
         self.frame_nav_layout = QHBoxLayout()
         self.frame_nav_layout.setContentsMargins(10, 5, 10, 15)
         
-        self.btn_prev_frame = QPushButton("◀ Previous")
+        self.btn_prev_frame = QPushButton("◀")
         self.btn_prev_frame.setFixedWidth(100)
         self.btn_prev_frame.clicked.connect(lambda: self.change_frame(-1))
         
-        self.btn_next_frame = QPushButton("Next ▶")
+        self.btn_next_frame = QPushButton("▶")
         self.btn_next_frame.setFixedWidth(100)
         self.btn_next_frame.clicked.connect(lambda: self.change_frame(1))
         
@@ -327,11 +327,11 @@ class CorrelationGui(QMainWindow):
         instructions_text = (
             "Welcome to Map Operations Master\n\n"
             "This software correlates scanning electron microscopy (SEM) images\n"
-            "with EBIC current measurements, mapping the intensity at each point.\n\n"
+            "with EBIC current measurements, allowing to carry out many map operations!.\n\n"
             "LOAD INSTRUCTIONS:\n"
             "Please load a multi-page .tif file containing:\n"
-            "  • 1st Image (Frame 0): SEM topography image.\n"
-            "  • 2nd Image (Frame 1): EBIC current map."
+            "  • 1st Image: SEM topography image.\n"
+            "  • 2nd Image: EBIC current map."
         )
         
         self.ax.text(0.5, 0.5, instructions_text, 
@@ -537,7 +537,7 @@ class CorrelationGui(QMainWindow):
         self.slider_opacity.blockSignals(True)
         self.slider_opacity.setValue(50)
         self.slider_opacity.blockSignals(False)
-        self.lbl_opacity.setText("EBIC Intensity: 50%")
+        self.lbl_opacity.setText("EBIC Weight: 50%")
         
         self.btn_overlay.blockSignals(True)
         self.btn_overlay.setChecked(False)

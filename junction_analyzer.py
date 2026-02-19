@@ -51,7 +51,6 @@ class CustomFigureViewer(QMainWindow):
             if not file_path.lower().endswith('.png'):
                 file_path += '.png'
             self.fig.savefig(file_path, dpi=300, bbox_inches='tight')
-            QMessageBox.information(self, "Éxito", "Imagen guardada correctamente.")
 
     def save_as_csv(self):
         file_path, _ = QFileDialog.getSaveFileName(self, "Save Data", "", "CSV Data (*.csv)")
@@ -75,8 +74,6 @@ class CustomFigureViewer(QMainWindow):
                                 for x, y in zip(line.get_xdata(), line.get_ydata()):
                                     writer.writerow([x, y])
                                 writer.writerow([])
-                                
-                QMessageBox.information(self, "Éxito", "Vectores extraídos y guardados correctamente en CSV.")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"No se pudo guardar el CSV:\n{str(e)}")
 
