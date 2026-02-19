@@ -2,7 +2,8 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QFileDialog, QToolBar, QFrame, QLabel, 
                              QPushButton, QStatusBar, QButtonGroup, QSlider,
                              QComboBox, QMenu, QToolButton, QTabWidget,
-                             QDoubleSpinBox, QCheckBox, QMessageBox, QSpinBox)
+                             QDoubleSpinBox, QCheckBox, QMessageBox, QSpinBox,
+                             QScrollArea, QGroupBox)
 from PyQt6.QtGui import QAction
 from PyQt6.QtCore import Qt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -15,7 +16,7 @@ import scipy.ndimage as ndi
 # Import the data manager and analyzers
 from image_handler import SEMDataManager
 from junction_analyzer import JunctionAnalyzer
-from profile_manager import ProfileManager
+from profile_manager import ProfileManager, ProfilePlotWindow
 
 class CorrelationGui(QMainWindow):
     def __init__(self):
@@ -30,12 +31,12 @@ class CorrelationGui(QMainWindow):
         self.img_width = 0
         self.img_height = 0
         
-        # Dynamic physical variables (can be nm, um, or mm)
+        # Dynamic physical variables
         self.pixel_size_phys = 1.0
         self.width_phys = 0.0
         self.height_phys = 0.0
-        self.unit_label = "\u03BCm" # Default
-        self.unit_factor = 1e6     # Conversion factor from meters
+        self.unit_label = "\u03BCm" 
+        self.unit_factor = 1e6     
         
         self.mode = "view" 
         self.show_overlay = False 
@@ -62,14 +63,15 @@ class CorrelationGui(QMainWindow):
         self.stored_lines = [] 
         self.junction_line_artist = None
         
+        # Profile Data Memory
+        self.plot_windows = []
+        
         # --- FRAME NAVIGATION ---
         self.frames_list = []
         self.current_frame_idx = 0
 
         # --- UI SETUP ---
         self.setup_ui()
-        
-        # --- INITIALIZE MANAGERS ---
         self.profile_manager = ProfileManager(self.ax, self.canvas)
 
         # --- MATPLOTLIB EVENTS ---
@@ -80,6 +82,12 @@ class CorrelationGui(QMainWindow):
 
         # --- START: INSTRUCTION SCREEN ---
         self.show_placeholder()
+
+    def phys_to_px(self, px, py):
+        """Convierte coordenadas físicas del gráfico a píxeles de las matrices originales."""
+        c = px / self.pixel_size_phys
+        r = (self.height_phys - py) / self.pixel_size_phys
+        return c, r
 
     def setup_ui(self):
         # 1. Toolbar
@@ -333,35 +341,31 @@ class CorrelationGui(QMainWindow):
         prof_layout.addWidget(self.btn_gen_profiles)
 
         prof_layout.addSpacing(10)
-        lbl_prof_inst2 = QLabel("2. Adjust points by dragging:\n   - Center: Slide along baseline.\n   - Ends: Extend/Shrink.")
+        lbl_prof_inst2 = QLabel("2. You can manually tweak endpoints.")
         lbl_prof_inst2.setStyleSheet("font-style: italic; color: #555555;")
-        lbl_prof_inst2.setWordWrap(True)
         prof_layout.addWidget(lbl_prof_inst2)
 
-        prof_layout.addSpacing(15)
-        lbl_prof_outs = QLabel("3. Select outputs:")
+        prof_layout.addSpacing(10)
+        lbl_prof_outs = QLabel("3. Select outputs per profile:")
         lbl_prof_outs.setStyleSheet("font-weight: bold;")
         prof_layout.addWidget(lbl_prof_outs)
 
-        self.chk_prof_a = QCheckBox("a) Extracted 1D Data Profiles")
-        self.chk_prof_b = QCheckBox("b) Cross-Section View")
-        self.chk_prof_c = QCheckBox("c) Signal Overlay")
-        self.chk_prof_d = QCheckBox("d) Export Matrix directly")
+        # Dynamic Checkbox Area for each Perpendicular
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_widget = QWidget()
+        self.scroll_layout = QVBoxLayout(self.scroll_widget)
+        self.scroll_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.scroll_area.setWidget(self.scroll_widget)
+        prof_layout.addWidget(self.scroll_area)
         
-        self.chk_prof_a.setChecked(True)
-
-        prof_layout.addWidget(self.chk_prof_a)
-        prof_layout.addWidget(self.chk_prof_b)
-        prof_layout.addWidget(self.chk_prof_c)
-        prof_layout.addWidget(self.chk_prof_d)
+        self.profile_checkboxes = {}
 
         prof_layout.addSpacing(15)
         self.btn_extract_profiles = QPushButton("Extract Data")
         self.btn_extract_profiles.setStyleSheet("QPushButton { font-weight: bold; background-color: #d1e7dd; padding: 8px; }")
         self.btn_extract_profiles.clicked.connect(self.extract_profiles_data)
         prof_layout.addWidget(self.btn_extract_profiles)
-
-        prof_layout.addStretch()
 
 
         # Add tabs
@@ -597,6 +601,13 @@ class CorrelationGui(QMainWindow):
             
         if hasattr(self, 'profile_manager'):
             self.profile_manager.clear()
+            
+        # Limpiar interfaz de perfiles
+        if hasattr(self, 'scroll_layout'):
+            for i in reversed(range(self.scroll_layout.count())):
+                widget = self.scroll_layout.itemAt(i).widget()
+                if widget: widget.deleteLater()
+            self.profile_checkboxes = {}
         
         self.scale_bar_length_phys = None
         self.scale_bar_label = None
@@ -709,10 +720,8 @@ class CorrelationGui(QMainWindow):
         x0_phys, y0_phys = xdata[0], ydata[0]
         x1_phys, y1_phys = xdata[1], ydata[1]
 
-        c0 = x0_phys / self.pixel_size_phys
-        r0 = (self.height_phys - y0_phys) / self.pixel_size_phys
-        c1 = x1_phys / self.pixel_size_phys
-        r1 = (self.height_phys - y1_phys) / self.pixel_size_phys
+        c0, r0 = self.phys_to_px(x0_phys, y0_phys)
+        c1, r1 = self.phys_to_px(x1_phys, y1_phys)
 
         v_c = c1 - c0
         v_r = r1 - r0
@@ -794,7 +803,6 @@ class CorrelationGui(QMainWindow):
             
         source = self.combo_baseline_source.currentText()
         
-        # Determinar de dónde sacar los puntos de la línea base (p0 y p1)
         if source == "Manual Line":
             if len(self.stored_lines) != 1:
                 QMessageBox.warning(self, "Error", "Please draw exactly ONE manual baseline on the image.")
@@ -804,37 +812,121 @@ class CorrelationGui(QMainWindow):
             p0 = (xdata[0], ydata[0])
             p1 = (xdata[-1], ydata[-1])
             
-        else:  # source == "Detected Junction"
+        else: 
             if self.junction_line_artist is None:
                 QMessageBox.warning(self, "Error", "No Detected Junction found. Please run the Junction Detection first.")
                 return
             xdata, ydata = self.junction_line_artist.get_data()
-            # Cogemos el primer y último punto de la curva/línea ajustada para establecer la dirección
             p0 = (xdata[0], ydata[0])
             p1 = (xdata[-1], ydata[-1])
         
         num_profiles = self.spin_prof_count.value()
-        
-        # Escalar el valor de la longitud en um a las unidades actuales del canvas
-        length_um = self.spin_prof_length.value()
-        length_m = length_um * 1e-6
+        length_m = self.spin_prof_length.value() * 1e-6
         plot_length = length_m * self.unit_factor 
 
         self.profile_manager.generate_profiles(
             p0=p0,
             p1=p1,
             num_profiles=num_profiles,
-            default_length=plot_length / 2.0  # La mitad hacia arriba y la mitad hacia abajo
+            default_length=plot_length / 2.0 
         )
-        self.set_mode("view") # Desactiva el modo línea para poder arrastrar libremente
+        self.set_mode("view") 
+
+        # Crear dinámicamente el listado de CheckBoxes
+        for i in reversed(range(self.scroll_layout.count())):
+            widget = self.scroll_layout.itemAt(i).widget()
+            if widget: 
+                widget.setParent(None)
+                widget.deleteLater()
+        self.profile_checkboxes.clear()
+
+        for i in range(num_profiles):
+            gb = QGroupBox(f"Perpendicular {i+1}")
+            gb.setCheckable(True)
+            gb.setChecked(True)
+            
+            vbox = QVBoxLayout(gb)
+            cb_sem = QCheckBox("a) SEM norm")
+            cb_abs = QCheckBox("b) abs(I)")
+            cb_ln = QCheckBox("c) ln abs(I)")
+            cb_deriv = QCheckBox("d) d ln(abs(I)) / dx")
+            
+            cb_sem.setChecked(True)
+            cb_abs.setChecked(True)
+            cb_ln.setChecked(True)
+            cb_deriv.setChecked(True)
+            
+            vbox.addWidget(cb_sem)
+            vbox.addWidget(cb_abs)
+            vbox.addWidget(cb_ln)
+            vbox.addWidget(cb_deriv)
+            
+            self.scroll_layout.addWidget(gb)
+            
+            self.profile_checkboxes[i+1] = {
+                'group': gb,
+                'sem': cb_sem,
+                'abs_i': cb_abs,
+                'ln_i': cb_ln,
+                'deriv': cb_deriv
+            }
 
     def extract_profiles_data(self):
-        """Función placeholder para la futura extracción de datos a), b), c)..."""
         if not self.profile_manager.profiles:
             QMessageBox.warning(self, "Error", "No profiles generated yet.")
             return
+
+        # Limpiar referencias de ventanas viejas que ya estén cerradas
+        self.plot_windows = [w for w in self.plot_windows if w.isVisible()]
+
+        for prof in self.profile_manager.profiles:
+            ui_elements = self.profile_checkboxes.get(prof.idx)
             
-        QMessageBox.information(self, "Working on it", "Data extraction logic will be implemented here.")
+            # Si el grupo completo está desactivado o no existe, lo saltamos
+            if not ui_elements or not ui_elements['group'].isChecked():
+                continue
+                
+            selected_keys = []
+            if ui_elements['sem'].isChecked(): selected_keys.append('sem')
+            if ui_elements['abs_i'].isChecked(): selected_keys.append('abs_i')
+            if ui_elements['ln_i'].isChecked(): selected_keys.append('ln_i')
+            if ui_elements['deriv'].isChecked(): selected_keys.append('deriv')
+            
+            # Si no hay checkboxes de métricas marcados dentro del grupo, lo saltamos
+            if not selected_keys: 
+                continue
+                
+            # Extraer las coordenadas físicas de P1 y P2 de la línea
+            x_data, y_data = prof.line.get_data()
+            P1x, P1y = x_data[0], y_data[0]
+            P2x, P2y = x_data[2], y_data[2]
+            
+            # Pasar a píxeles puros para extraer datos
+            c1, r1 = self.phys_to_px(P1x, P1y)
+            c2, r2 = self.phys_to_px(P2x, P2y)
+            
+            N = int(np.ceil(np.hypot(c2 - c1, r2 - r1)))
+            if N < 2: N = 2
+            
+            c_vals = np.linspace(c1, c2, N)
+            r_vals = np.linspace(r1, r2, N)
+            
+            sem_data = self.data_manager.sem_data.astype(float)
+            if self.data_manager.current_map is not None:
+                ebic_data = self.data_manager.current_map.astype(float)
+            else:
+                ebic_data = np.zeros_like(sem_data)
+                
+            sem_prof = ndi.map_coordinates(sem_data, [r_vals, c_vals], order=1, mode='nearest')
+            ebic_prof = ndi.map_coordinates(ebic_data, [r_vals, c_vals], order=1, mode='nearest')
+            
+            # Crear el vector de distancias X basado en la longitud física original
+            dist_um = np.linspace(0, np.hypot(P2x - P1x, P2y - P1y), N)
+            
+            # Crear y abrir la ventana solo para este perfil
+            win = ProfilePlotWindow(prof.idx, dist_um, sem_prof, ebic_prof, selected_keys, self.unit_label)
+            win.show()
+            self.plot_windows.append(win)
 
     # --- ACTIONS ---
     def action_home_reset(self):
@@ -851,7 +943,11 @@ class CorrelationGui(QMainWindow):
             except: pass
             self.junction_line_artist = None
             
-        self.profile_manager.clear() # Limpiar los perfiles generados también
+        self.profile_manager.clear() 
+        for i in reversed(range(self.scroll_layout.count())):
+            w = self.scroll_layout.itemAt(i).widget()
+            if w: w.deleteLater()
+        self.profile_checkboxes.clear()
             
         self.current_line_artist = None
         self.line_start_point = None
@@ -891,7 +987,6 @@ class CorrelationGui(QMainWindow):
     def on_mouse_press(self, event):
         if event.inaxes != self.ax: return
         
-        # 1. Si estamos en modo "view", chequeamos si el usuario intenta interactuar con un Perfil
         if self.mode == 'view' and self.profile_manager.on_press(event):
             return 
         
@@ -900,7 +995,6 @@ class CorrelationGui(QMainWindow):
                 self.pan_start = (event.xdata, event.ydata)
                 self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
             elif self.mode == 'line':
-                # Remove any existing line and profiles to ensure only 1 is drawn
                 if len(self.stored_lines) >= 1:
                     for l in self.stored_lines: l.remove()
                     self.stored_lines.clear()
@@ -915,7 +1009,6 @@ class CorrelationGui(QMainWindow):
         except: pass
 
     def on_mouse_release(self, event):
-        # Soltar la interacción con los Perfiles
         if self.mode == 'view' and self.profile_manager.on_release(event): return
 
         try:
@@ -930,7 +1023,6 @@ class CorrelationGui(QMainWindow):
         except: pass
 
     def on_mouse_move(self, event):
-        # Actualizar posición de las coordenadas en la barra
         try:
             if event.inaxes:
                 px_x = int(event.xdata / self.pixel_size_phys)
@@ -943,7 +1035,6 @@ class CorrelationGui(QMainWindow):
                 return
         except: pass
 
-        # Arrastrar perfiles si estamos sobre uno en modo "view"
         if self.mode == 'view' and self.profile_manager.on_drag(event): return
 
         try:

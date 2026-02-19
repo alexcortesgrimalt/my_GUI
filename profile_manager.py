@@ -1,5 +1,115 @@
 import numpy as np
+import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from PyQt6.QtWidgets import QMainWindow, QToolBar, QFileDialog
+from PyQt6.QtGui import QAction
+from PyQt6.QtCore import Qt
+
+def gradient_with_window(x, y, window=9):
+    """
+    Compute gradient using a moving window with linear fit.
+    This provides smoother derivatives than np.gradient by fitting
+    a line to a local window around each point.
+    """
+    if window % 2 == 0:
+        raise ValueError("window must be odd")
+    n = len(x)
+    k = window // 2
+    dy = np.full(n, np.nan)
+    x_arr = np.asarray(x)
+    y_arr = np.asarray(y)
+    for i in range(n):
+        lo = max(0, i - k)
+        hi = min(n, i + k + 1)
+        xi = x_arr[lo:hi]
+        yi = y_arr[lo:hi]
+        if xi.size >= 2:
+            p = np.polyfit(xi, yi, 1)
+            dy[i] = p[0]
+    return dy
+
+class ProfilePlotWindow(QMainWindow):
+    """Ventana individual para mostrar los gráficos de una perpendicular."""
+    def __init__(self, prof_idx, dist, sem, ebic, selected_keys, unit_label="\u03BCm"):
+        super().__init__()
+        self.setWindowTitle(f"Perpendicular {prof_idx} Data")
+        self.resize(700, 200 * len(selected_keys) + 100)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        
+        # Crear los subplots dinámicamente según las selecciones
+        self.fig, self.axes = plt.subplots(len(selected_keys), 1, sharex=True)
+        self.canvas = FigureCanvas(self.fig)
+        self.setCentralWidget(self.canvas)
+        
+        # Barra de herramientas para exportar
+        toolbar = QToolBar("Export Tools")
+        self.addToolBar(toolbar)
+        
+        save_action = QAction("Save Plot (.png)", self)
+        save_action.triggered.connect(self.save_plot)
+        toolbar.addAction(save_action)
+        
+        csv_action = QAction("Save Data (.csv)", self)
+        csv_action.triggered.connect(self.save_csv)
+        toolbar.addAction(csv_action)
+        
+        # Asegurarnos de que axes sea iterable
+        if len(selected_keys) == 1:
+            ax_list = [self.axes]
+        else:
+            ax_list = self.axes
+            
+        # Cálculos de datos
+        self.dist = dist
+        self.sem_norm = (sem - np.min(sem)) / (np.ptp(sem) + 1e-12)
+        self.abs_i = np.abs(ebic)
+        
+        pos = self.abs_i[self.abs_i > 0]
+        floor = max(np.min(pos) * 0.1, 1e-12) if pos.size > 0 else 1e-12
+        self.ln_i = np.log(np.maximum(self.abs_i, floor))
+        
+        if len(dist) > 1:
+            self.deriv = gradient_with_window(dist, self.ln_i, window=9)
+        else:
+            self.deriv = np.zeros_like(self.ln_i)
+            
+        # Dibujar cada gráfico solicitado
+        for idx, key in enumerate(selected_keys):
+            ax = ax_list[idx]
+            if key == 'sem':
+                ax.plot(dist, self.sem_norm, color='tab:blue', lw=2)
+                ax.set_ylabel("SEM norm", color='tab:blue', fontweight='bold')
+            elif key == 'abs_i':
+                ax.plot(dist, self.abs_i, color='tab:red', lw=2)
+                ax.set_ylabel("abs(I) [nA]", color='tab:red', fontweight='bold')
+            elif key == 'ln_i':
+                ax.plot(dist, self.ln_i, color='tab:orange', lw=2)
+                ax.set_ylabel("ln abs(I)", color='tab:orange', fontweight='bold')
+            elif key == 'deriv':
+                ax.plot(dist, self.deriv, color='tab:green', lw=2)
+                ax.set_ylabel(f"d ln(I)/dx [1/{unit_label}]", color='tab:green', fontweight='bold')
+                ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
+                
+            ax.grid(True, linestyle='--', alpha=0.5)
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            
+        ax_list[-1].set_xlabel(f"Distance ({unit_label})", fontweight='bold')
+        self.fig.suptitle(f"Profile Extraction: Perpendicular {prof_idx}", fontsize=14, fontweight='bold')
+        self.fig.tight_layout()
+        
+    def save_plot(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save Plot", f"Perpendicular_{self.windowTitle().split()[1]}.png", "PNG (*.png)")
+        if path: self.fig.savefig(path, dpi=300, bbox_inches='tight')
+        
+    def save_csv(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save CSV", f"Perpendicular_{self.windowTitle().split()[1]}.csv", "CSV (*.csv)")
+        if path:
+            header = "Distance,SEM_norm,abs_I,ln_abs_I,deriv_ln_I"
+            data = np.column_stack([self.dist, self.sem_norm, self.abs_i, self.ln_i, self.deriv])
+            np.savetxt(path, data, delimiter=',', header=header, comments='', fmt='%.6e')
+
 
 class InteractiveProfile:
     """Clase para manejar un único perfil interactivo."""
@@ -13,13 +123,11 @@ class InteractiveProfile:
         self.idx = idx  # Número del perfil
         self.color = color
         
-        # Calcular vectores de dirección y normal
         v = self.p1 - self.p0
         self.length = np.linalg.norm(v)
         self.u = v / self.length if self.length > 0 else np.array([1, 0])
-        self.n = np.array([-self.u[1], self.u[0]]) # Perpendicular
+        self.n = np.array([-self.u[1], self.u[0]])
         
-        # Crear los artistas gráficos (Línea discontinua con marcadores en los extremos y centro para arrastrar)
         self.line = Line2D([], [], color=self.color, linestyle='--', linewidth=2, 
                            marker='o', markersize=6, markerfacecolor='white', markeredgewidth=1.5)
         
@@ -31,22 +139,17 @@ class InteractiveProfile:
         self.update_positions()
 
     def update_positions(self):
-        """Actualiza la geometría de la línea basada en t, d1 y d2."""
-        self.t = np.clip(self.t, 0.0, 1.0) # Restringir al segmento de la línea original
-        B = self.p0 + self.t * (self.p1 - self.p0) # Centro
+        self.t = np.clip(self.t, 0.0, 1.0) 
+        B = self.p0 + self.t * (self.p1 - self.p0)
         
-        P1 = B + self.d1 * self.n # Extremo superior
-        P2 = B - self.d2 * self.n # Extremo inferior
+        P1 = B + self.d1 * self.n
+        P2 = B - self.d2 * self.n 
         
-        # Data de la línea: P1 -> B -> P2
         self.line.set_data([P1[0], B[0], P2[0]], [P1[1], B[1], P2[1]])
-        
-        # Posición del texto (ligeramente desplazado del extremo P1)
         offset = max(self.length * 0.03, (self.d1 + self.d2) * 0.05)
         self.text.set_position((P1[0] + self.n[0] * offset, P1[1] + self.n[1] * offset))
 
     def remove(self):
-        """Limpia los artistas del gráfico."""
         try: self.line.remove()
         except: pass
         try: self.text.remove()
@@ -59,12 +162,11 @@ class ProfileManager:
         self.ax = ax
         self.canvas = canvas
         self.profiles = []
-        self.active_handle = None # (idx_perfil, tipo_handle) -> 0: P1, 1: Centro, 2: P2
+        self.active_handle = None
         self.p0 = None
         self.p1 = None
 
     def generate_profiles(self, p0, p1, num_profiles, default_length):
-        """Crea N perfiles equiespaciados."""
         self.clear()
         self.p0 = np.array(p0)
         self.p1 = np.array(p1)
@@ -81,40 +183,32 @@ class ProfileManager:
         self.canvas.draw()
 
     def clear(self):
-        """Elimina todos los perfiles actuales."""
         for p in self.profiles: p.remove()
         self.profiles.clear()
         self.active_handle = None
         self.canvas.draw()
 
     def get_closest_handle(self, x_px, y_px, max_dist_px=15):
-        """Encuentra el tirador (handle) más cercano al clic del ratón."""
         if x_px is None or y_px is None: return None
-        
         best_dist = float('inf')
         best_match = None
 
         for i, prof in enumerate(self.profiles):
-            x_data, y_data = prof.line.get_data() # Índices: 0=P1, 1=Centro, 2=P2
+            x_data, y_data = prof.line.get_data()
             for j in range(3):
-                # Convertir coordenadas de los datos a píxeles de la pantalla para calcular distancia real
                 disp_pt = self.ax.transData.transform((x_data[j], y_data[j]))
                 dist = np.hypot(disp_pt[0] - x_px, disp_pt[1] - y_px)
-                
                 if dist < best_dist and dist < max_dist_px:
                     best_dist = dist
                     best_match = (i, j)
-                    
         return best_match
 
-    # --- EVENTOS INTERACTIVOS MATPLOTLIB ---
     def on_press(self, event):
         if not self.profiles or event.inaxes != self.ax: return False
-        
         handle = self.get_closest_handle(event.x, event.y)
         if handle:
             self.active_handle = handle
-            return True # Evento consumido
+            return True
         return False
 
     def on_drag(self, event):
@@ -124,21 +218,21 @@ class ProfileManager:
         prof_idx, handle_idx = self.active_handle
         prof = self.profiles[prof_idx]
         mouse_pt = np.array([event.xdata, event.ydata])
-        min_len = prof.length * 0.02 # Longitud mínima para que no se invierta la línea
+        min_len = prof.length * 0.02 
 
-        if handle_idx == 1: # Arrastrando el CENTRO (mover a lo largo de la línea base)
+        if handle_idx == 1: 
             v = prof.p1 - prof.p0
             v_norm = np.dot(v, v)
             if v_norm > 0:
                 t_new = np.dot(mouse_pt - prof.p0, v) / v_norm
                 prof.t = t_new
 
-        elif handle_idx == 0: # Arrastrando P1 (Extremo superior)
+        elif handle_idx == 0:
             B = prof.p0 + prof.t * (prof.p1 - prof.p0)
             d_new = np.dot(mouse_pt - B, prof.n)
-            prof.d1 = max(d_new, min_len) # Evitar que sea menor de 0
+            prof.d1 = max(d_new, min_len)
 
-        elif handle_idx == 2: # Arrastrando P2 (Extremo inferior)
+        elif handle_idx == 2:
             B = prof.p0 + prof.t * (prof.p1 - prof.p0)
             d_new = np.dot(mouse_pt - B, -prof.n)
             prof.d2 = max(d_new, min_len)
