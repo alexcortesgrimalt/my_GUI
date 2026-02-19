@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.interpolate import interp1d, splrep, splev
 from scipy.stats import pearsonr
+from scipy.ndimage import map_coordinates  # <--- Importación añadida
 
 from PyQt6.QtWidgets import (QMainWindow, QToolBar, QToolButton, QMenu, 
                              QFileDialog, QMessageBox)
@@ -70,7 +71,7 @@ class CustomFigureViewer(QMainWindow):
                             label = line.get_label()
                             if not label.startswith('_'):  
                                 writer.writerow([f"--- Line: {title} | {label} ---"])
-                                writer.writerow(["X (px)", "Y (px)"])
+                                writer.writerow(["X (px)", "Y (px) o Valor"])
                                 for x, y in zip(line.get_xdata(), line.get_ydata()):
                                     writer.writerow([x, y])
                                 writer.writerow([])
@@ -286,6 +287,67 @@ class JunctionAnalyzer:
             print(f"[Canny (Filtered, Spline)] failed: {e}")
 
         return results
+
+    # ==========================================
+    # NUEVA FUNCIONALIDAD: OBSERVE JUNCTION
+    # ==========================================
+    def observe_junction(self, image, detected_coords, image_current=None):
+        """
+        Extrae y visualiza los perfiles de SEM y EBIC (si está disponible) a lo largo
+        de la línea de la unión detectada.
+        """
+        if detected_coords is None or len(detected_coords) == 0:
+            print("No se proporcionaron coordenadas detectadas válidas para observar.")
+            return
+
+        xs = detected_coords[:, 0]
+        ys = detected_coords[:, 1]
+
+        # Extraer valores topográficos (SEM) a lo largo de la línea
+        sem_vals = map_coordinates(image, [ys, xs], order=1, mode='nearest')
+        
+        # Extraer valores de EBIC/Current si existen
+        cur_vals = None
+        if image_current is not None:
+            cur_vals = map_coordinates(image_current, [ys, xs], order=1, mode='nearest')
+
+        # Calcular distancia a lo largo de la línea en micrómetros
+        diffs = np.sqrt(np.sum(np.diff(detected_coords, axis=0) ** 2, axis=1))
+        dists_px = np.concatenate(([0.0], np.cumsum(diffs)))
+        dists_um = dists_px * self.pixel_size_m * 1e6
+
+        # Normalizar SEM para que sea fácilmente comparable
+        sem_norm = (sem_vals - np.min(sem_vals)) / (np.ptp(sem_vals) + 1e-12)
+
+        # Configurar la gráfica
+        fig, ax1 = plt.subplots(figsize=(8, 4))
+        
+        ax1.plot(dists_um, sem_norm, color='tab:blue', linewidth=2, label='SEM (norm)')
+        ax1.set_xlabel('Distance along junction (µm)')
+        ax1.set_ylabel('SEM (norm)', color='tab:blue')
+        ax1.tick_params(axis='y', labelcolor='tab:blue')
+        ax1.grid(True, linestyle='--', alpha=0.5)
+
+        if cur_vals is not None:
+            # Crear un eje secundario (twin) para la corriente
+            ax2 = ax1.twinx()
+            ax2.plot(dists_um, cur_vals, color='tab:red', linewidth=1.5, label='Current (nA)')
+            ax2.set_ylabel('Current (nA)', color='tab:red')
+            ax2.tick_params(axis='y', labelcolor='tab:red')
+
+            # Unificar la leyenda de ambos ejes
+            lines_1, labels_1 = ax1.get_legend_handles_labels()
+            lines_2, labels_2 = ax2.get_legend_handles_labels()
+            ax1.legend(lines_1 + lines_2, labels_1 + labels_2, loc='best')
+        else:
+            ax1.legend(loc='best')
+
+        fig.suptitle("Profile Along Detected Junction", fontsize=13, weight='bold')
+        fig.tight_layout()
+
+        # Mostrar utilizando nuestra ventana PyQt6 para permitir guardar la figura y el CSV
+        self._show_custom_window(fig, "E) Observe Junction")
+
 
     def _apply_preprocessing_filter(self, roi):
         normalized_roi = cv2.normalize(roi, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
