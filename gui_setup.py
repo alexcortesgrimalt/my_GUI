@@ -12,40 +12,40 @@ import matplotlib.image as mpimg
 import numpy as np
 import scipy.ndimage as ndi
 
-# Importamos el data manager y el analyzer
+# Import the data manager and analyzer
 from image_handler import SEMDataManager
 from junction_analyzer import JunctionAnalyzer
 
 class CorrelationGui(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Correlación SEM-EBIC - Overlay Master")
+        self.setWindowTitle("Map Operations Master")
         self.resize(1400, 900)
 
         # --- DATA MANAGER ---
         self.data_manager = SEMDataManager()
 
-        # --- ESTADO VISUAL ---
+        # --- VISUAL STATE ---
         self.img_width = 0
         self.img_height = 0
         
-        # Variables físicas dinámicas (pueden ser nm, um o mm)
+        # Dynamic physical variables (can be nm, um, or mm)
         self.pixel_size_phys = 1.0
         self.width_phys = 0.0
         self.height_phys = 0.0
-        self.unit_label = "\u03BCm" # Por defecto
-        self.unit_factor = 1e6     # Factor de conversión desde metros
+        self.unit_label = "\u03BCm" # Default
+        self.unit_factor = 1e6     # Conversion factor from meters
         
         self.mode = "view" 
         self.show_overlay = False 
         self.opacity = 0.5        
 
-        # --- OBJETOS GRÁFICOS ---
+        # --- GRAPHIC OBJECTS ---
         self.layer_sem = None
         self.layer_ebic = None
         self.cbar = None 
         
-        # Datos de la scale bar
+        # Scale bar data
         self.scale_bar_length_phys = None
         self.scale_bar_label = None
         self.scale_bar_line = None
@@ -54,27 +54,27 @@ class CorrelationGui(QMainWindow):
         self.colormaps = ['plasma', 'viridis', 'inferno', 'magma', 'cividis', 'rainbow', 'jet', 'gray']
         self.current_cmap = 'plasma'
 
-        # Variables interactivas
+        # Interactive variables
         self.pan_start = None 
         self.line_start_point = None
         self.current_line_artist = None 
         self.stored_lines = [] 
         self.junction_line_artist = None
         
-        # --- NAVEGACIÓN DE FRAMES ---
+        # --- FRAME NAVIGATION ---
         self.frames_list = []
         self.current_frame_idx = 0
 
         # --- UI SETUP ---
         self.setup_ui()
         
-        # --- MATPLOTLIB EVENTOS ---
+        # --- MATPLOTLIB EVENTS ---
         self.canvas.mpl_connect('scroll_event', self.zoom_fun)
         self.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
         self.canvas.mpl_connect('button_press_event', self.on_mouse_press)
         self.canvas.mpl_connect('button_release_event', self.on_mouse_release)
 
-        # --- INICIO: PANTALLA CON INSTRUCCIONES ---
+        # --- START: INSTRUCTION SCREEN ---
         self.show_placeholder()
 
     def setup_ui(self):
@@ -83,13 +83,13 @@ class CorrelationGui(QMainWindow):
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
         
-        upload_action = QAction("Cargar .TIF Multi-Frame", self)
+        upload_action = QAction("Load Multi-Frame .TIF", self)
         upload_action.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_DialogOpenButton))
         upload_action.triggered.connect(self.upload_image)
         toolbar.addAction(upload_action)
 
         save_button = QToolButton()
-        save_button.setText("Guardar Exportar...")
+        save_button.setText("Save / Export...")
         save_button.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_DialogSaveButton))
         save_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         save_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
@@ -120,7 +120,7 @@ class CorrelationGui(QMainWindow):
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.lbl_coords = QLabel("Coordenadas (Px): - , -")
+        self.lbl_coords = QLabel("Coordinates (Px): - , -")
         self.status_bar.addPermanentWidget(self.lbl_coords)
 
         # 2. Main Layout
@@ -130,7 +130,7 @@ class CorrelationGui(QMainWindow):
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
 
-        # -- PANEL IZQUIERDO --
+        # -- LEFT PANEL --
         self.left_panel = QFrame()
         self.left_panel.setFixedWidth(70) 
         self.left_panel.setStyleSheet("background-color: #e0e0e0; border-right: 1px solid #c0c0c0;")
@@ -139,23 +139,23 @@ class CorrelationGui(QMainWindow):
         self.tools_layout.setContentsMargins(5, 10, 5, 10)
         self.tools_layout.setSpacing(15)
 
-        self.btn_home = self.create_tool_button("", "Resetear Zoom y Líneas")
+        self.btn_home = self.create_tool_button("", "Reset Zoom and Lines")
         self.btn_home.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_DirHomeIcon))
         self.btn_home.clicked.connect(self.action_home_reset) 
         
-        self.btn_pan = self.create_tool_button("✋", "Mover (Pan)")
+        self.btn_pan = self.create_tool_button("✋", "Pan")
         self.btn_pan.setCheckable(True)
         self.btn_pan.clicked.connect(lambda: self.set_mode("pan"))
 
-        self.btn_line = self.create_tool_button("📏", "Dibujar Línea")
+        self.btn_line = self.create_tool_button("📏", "Draw Line")
         self.btn_line.setCheckable(True)
         self.btn_line.clicked.connect(lambda: self.set_mode("line"))
         
-        self.btn_grid = self.create_tool_button("▦", "Activar/Desactivar Grid")
+        self.btn_grid = self.create_tool_button("▦", "Toggle Grid")
         self.btn_grid.setCheckable(True)
         self.btn_grid.clicked.connect(self.toggle_grid)
         
-        self.btn_overlay = self.create_tool_button("OL", "Activar Overlay")
+        self.btn_overlay = self.create_tool_button("OL", "Toggle Overlay")
         self.btn_overlay.setCheckable(True)
         self.btn_overlay.setStyleSheet("QPushButton { font-weight: bold; color: purple; }")
         self.btn_overlay.clicked.connect(self.toggle_overlay)
@@ -174,7 +174,7 @@ class CorrelationGui(QMainWindow):
 
         self.main_layout.addWidget(self.left_panel)
 
-        # -- CENTRO --
+        # -- CENTER --
         self.center_panel = QWidget()
         self.center_layout = QVBoxLayout(self.center_panel)
         self.center_layout.setContentsMargins(0,0,0,0)
@@ -187,11 +187,11 @@ class CorrelationGui(QMainWindow):
         self.frame_nav_layout = QHBoxLayout()
         self.frame_nav_layout.setContentsMargins(10, 5, 10, 15)
         
-        self.btn_prev_frame = QPushButton("◀ Anterior")
+        self.btn_prev_frame = QPushButton("◀ Previous")
         self.btn_prev_frame.setFixedWidth(100)
         self.btn_prev_frame.clicked.connect(lambda: self.change_frame(-1))
         
-        self.btn_next_frame = QPushButton("Siguiente ▶")
+        self.btn_next_frame = QPushButton("Next ▶")
         self.btn_next_frame.setFixedWidth(100)
         self.btn_next_frame.clicked.connect(lambda: self.change_frame(1))
         
@@ -208,7 +208,7 @@ class CorrelationGui(QMainWindow):
         self.center_layout.addLayout(self.frame_nav_layout)
         self.main_layout.addWidget(self.center_panel)
 
-        # -- PANEL DERECHO (Pestañas) --
+        # -- RIGHT PANEL (Tabs) --
         self.right_panel = QFrame()
         self.right_panel.setFixedWidth(280)
         self.right_panel.setStyleSheet("background-color: #f0f0f0; border-left: 1px solid #dcdcdc;")
@@ -217,15 +217,15 @@ class CorrelationGui(QMainWindow):
 
         self.tabs_right = QTabWidget()
         
-        # PESTAÑA 1: VISUALIZACIÓN
+        # TAB 1: VISUALIZATION
         self.tab_vis = QWidget()
         vis_layout = QVBoxLayout(self.tab_vis)
-        lbl_props = QLabel("Visualización")
+        lbl_props = QLabel("Visualization")
         lbl_props.setStyleSheet("font-weight: bold; font-size: 14px;")
         vis_layout.addWidget(lbl_props)
         vis_layout.addSpacing(20)
 
-        lbl_cmap = QLabel("Paleta de Color:")
+        lbl_cmap = QLabel("Color Palette:")
         self.combo_cmap = QComboBox()
         self.combo_cmap.addItems(self.colormaps)
         self.combo_cmap.setCurrentText(self.current_cmap)
@@ -234,7 +234,7 @@ class CorrelationGui(QMainWindow):
         vis_layout.addWidget(self.combo_cmap)
         vis_layout.addSpacing(20)
 
-        self.lbl_opacity = QLabel(f"Intensidad EBIC: {int(self.opacity*100)}%")
+        self.lbl_opacity = QLabel(f"EBIC Intensity: {int(self.opacity*100)}%")
         self.slider_opacity = QSlider(Qt.Orientation.Horizontal)
         self.slider_opacity.setMinimum(0)
         self.slider_opacity.setMaximum(100)
@@ -244,7 +244,7 @@ class CorrelationGui(QMainWindow):
         vis_layout.addWidget(self.slider_opacity)
         vis_layout.addStretch()
         
-        # PESTAÑA 2: JUNCTION
+        # TAB 2: JUNCTION
         self.tab_junc = QWidget()
         junc_layout = QVBoxLayout(self.tab_junc)
         
@@ -253,7 +253,7 @@ class CorrelationGui(QMainWindow):
         junc_layout.addWidget(lbl_junc_title)
         junc_layout.addSpacing(10)
         
-        lbl_inst_1 = QLabel("1. Dibuja una única línea cercana\n a la junction (herramienta 📏).")
+        lbl_inst_1 = QLabel("1. Draw a single line near\n the junction (tool 📏).")
         lbl_inst_1.setWordWrap(True)
         junc_layout.addWidget(lbl_inst_1)
         
@@ -267,7 +267,7 @@ class CorrelationGui(QMainWindow):
         junc_layout.addWidget(self.spin_hw)
         
         junc_layout.addSpacing(15)
-        lbl_plots = QLabel("3. Selecciona las salidas:")
+        lbl_plots = QLabel("3. Select outputs:")
         lbl_plots.setStyleSheet("font-weight: bold;")
         junc_layout.addWidget(lbl_plots)
         
@@ -277,7 +277,7 @@ class CorrelationGui(QMainWindow):
         self.chk_d = QCheckBox("d) Canny (Filtered, Spline) - General")
         self.chk_e = QCheckBox("e) Observe Junction (Over Main)")
         
-        self.chk_e.setChecked(True) # Activado por defecto
+        self.chk_e.setChecked(True) # Activated by default
         
         junc_layout.addWidget(self.chk_a)
         junc_layout.addWidget(self.chk_b)
@@ -324,17 +324,17 @@ class CorrelationGui(QMainWindow):
         self.ax.clear()
         self.ax.axis('off') 
         
-        texto_instrucciones = (
-            "Bienvenido a Overlay Master\n\n"
-            "Este software correlaciona imágenes de microscopía electrónica (SEM)\n"
-            "con mediciones de corriente EBIC, mapeando la intensidad en cada punto.\n\n"
-            "INSTRUCCIONES DE CARGA:\n"
-            "Por favor, cargue un archivo en formato .tif multipágina que contenga:\n"
-            "  • 1ª Imagen (Frame 0): Imagen de topografía SEM.\n"
-            "  • 2ª Imagen (Frame 1): Mapa de corriente EBIC."
+        instructions_text = (
+            "Welcome to Map Operations Master\n\n"
+            "This software correlates scanning electron microscopy (SEM) images\n"
+            "with EBIC current measurements, mapping the intensity at each point.\n\n"
+            "LOAD INSTRUCTIONS:\n"
+            "Please load a multi-page .tif file containing:\n"
+            "  • 1st Image (Frame 0): SEM topography image.\n"
+            "  • 2nd Image (Frame 1): EBIC current map."
         )
         
-        self.ax.text(0.5, 0.5, texto_instrucciones, 
+        self.ax.text(0.5, 0.5, instructions_text, 
                      transform=self.ax.transAxes,
                      ha='center', va='center', 
                      fontsize=11, color='#333333',
@@ -347,9 +347,9 @@ class CorrelationGui(QMainWindow):
         
         self.canvas.draw()
 
-    # --- LÓGICA DE CARGA ---
+    # --- LOAD LOGIC ---
     def upload_image(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Cargar TIF", "", "TIF Files (*.tif *.tiff)")
+        file_path, _ = QFileDialog.getOpenFileName(self, "Load TIF", "", "TIF Files (*.tif *.tiff)")
         if file_path:
             self.reset_entire_state()
             success = self.data_manager.load_file(file_path)
@@ -359,7 +359,7 @@ class CorrelationGui(QMainWindow):
             else:
                 self.show_placeholder()
 
-    # --- NAVEGACIÓN DE FRAMES ---
+    # --- FRAME NAVIGATION ---
     def update_frame_ui(self):
         total = len(self.frames_list)
         if total > 0:
@@ -386,14 +386,14 @@ class CorrelationGui(QMainWindow):
             self.layer_sem.set_clim(vmin, vmax)
             
             if self.current_frame_idx == 0:
-                self.ax.set_title("Vista SEM (Frame 0)" + (" + EBIC" if self.show_overlay else ""))
+                self.ax.set_title("SEM View (Frame 0)" + (" + EBIC Overlay" if self.show_overlay else ""))
             elif self.current_frame_idx == 1:
-                self.ax.set_title("Vista EBIC Raw (Frame 1)" + (" + EBIC Overlay" if self.show_overlay else ""))
+                self.ax.set_title("Raw EBIC View (Frame 1)" + (" + EBIC Overlay" if self.show_overlay else ""))
             
             self.update_frame_ui()
             self.canvas.draw()
 
-    # --- CÁLCULO DE SCALE BAR AUTOMÁTICO (DINÁMICO CON ZOOM) ---
+    # --- AUTOMATIC SCALE BAR CALCULATION (DYNAMIC WITH ZOOM) ---
     def draw_scale_bar(self):
         if self.width_phys == 0: return
         
@@ -437,14 +437,14 @@ class CorrelationGui(QMainWindow):
                                            self.scale_bar_label, color='#00FF00', fontsize=11, 
                                            fontweight='normal', ha='center', va='bottom')
 
-    # --- LÓGICA DE GUARDADO ---
+    # --- SAVE LOGIC ---
     def save_data(self, content_type, file_format):
         if self.data_manager.sem_data is None:
-            self.status_bar.showMessage("Error: No hay datos cargados para guardar.", 3000)
+            self.status_bar.showMessage("Error: No data loaded to save.", 3000)
             return
 
         filter_str = f"{file_format.upper()} Files (*.{file_format})"
-        file_path, _ = QFileDialog.getSaveFileName(self, f"Guardar como {file_format.upper()}", "", filter_str)
+        file_path, _ = QFileDialog.getSaveFileName(self, f"Save as {file_format.upper()}", "", filter_str)
         
         if not file_path: return 
         if not file_path.lower().endswith(f".{file_format}"): file_path += f".{file_format}"
@@ -502,7 +502,7 @@ class CorrelationGui(QMainWindow):
                 temp_fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
                 temp_fig.savefig(file_path, format=file_format, pad_inches=0)
 
-            self.status_bar.showMessage(f"Guardado exitosamente en: {file_path}", 5000)
+            self.status_bar.showMessage(f"Successfully saved to: {file_path}", 5000)
 
         except Exception as e: print(e)
 
@@ -537,7 +537,7 @@ class CorrelationGui(QMainWindow):
         self.slider_opacity.blockSignals(True)
         self.slider_opacity.setValue(50)
         self.slider_opacity.blockSignals(False)
-        self.lbl_opacity.setText("Intensidad EBIC: 50%")
+        self.lbl_opacity.setText("EBIC Intensity: 50%")
         
         self.btn_overlay.blockSignals(True)
         self.btn_overlay.setChecked(False)
@@ -603,13 +603,13 @@ class CorrelationGui(QMainWindow):
                                              interpolation='nearest', aspect='equal', extent=extent_physical,
                                              vmin=vmin, vmax=vmax)
             self.cbar = self.fig.colorbar(self.layer_ebic, ax=self.ax, fraction=0.046, pad=0.04)
-            self.cbar.set_label('Corriente (nA)', rotation=270, labelpad=15)
+            self.cbar.set_label('Current (nA)', rotation=270, labelpad=15)
             self.layer_ebic.set_visible(False)
             self.cbar.ax.set_visible(False)
         
-        self.ax.set_xlabel(f"Distancia ({self.unit_label})")
-        self.ax.set_ylabel(f"Distancia ({self.unit_label})")
-        self.ax.set_title("Vista SEM (Frame 0)")
+        self.ax.set_xlabel(f"Distance ({self.unit_label})")
+        self.ax.set_ylabel(f"Distance ({self.unit_label})")
+        self.ax.set_title("SEM View (Frame 0)")
         self.ax.grid(self.btn_grid.isChecked())
         
         self.ax.set_xlim(0, self.width_phys)
@@ -618,45 +618,45 @@ class CorrelationGui(QMainWindow):
         self.draw_scale_bar()
         self.canvas.draw()
 
-    # --- JUNCTION DETECTION FUNCIONALIDAD ---
+    # --- JUNCTION DETECTION FUNCTIONALITY ---
     def run_junction_detection(self):
         if self.data_manager.sem_data is None:
-            QMessageBox.warning(self, "Error", "No hay imagen SEM cargada.")
+            QMessageBox.warning(self, "Error", "No SEM image loaded.")
             return
             
         if len(self.stored_lines) != 1:
-            QMessageBox.warning(self, "Error", "Por favor, dibuja exactamente UNA línea en la imagen.")
+            QMessageBox.warning(self, "Error", "Please draw exactly ONE line on the image.")
             return
 
-        # 1. Obtener coordenadas físicas de la línea
+        # 1. Get physical coordinates of the line
         line = self.stored_lines[0]
         xdata, ydata = line.get_data()
         x0_phys, y0_phys = xdata[0], ydata[0]
         x1_phys, y1_phys = xdata[1], ydata[1]
 
-        # 2. Convertir a píxeles
+        # 2. Convert to pixels
         c0 = x0_phys / self.pixel_size_phys
         r0 = (self.height_phys - y0_phys) / self.pixel_size_phys
         c1 = x1_phys / self.pixel_size_phys
         r1 = (self.height_phys - y1_phys) / self.pixel_size_phys
 
-        # Vector de la línea
+        # Line vector
         v_c = c1 - c0
         v_r = r1 - r0
         L_px = np.sqrt(v_c**2 + v_r**2)
         
         if L_px == 0:
-            QMessageBox.warning(self, "Error", "La línea dibujada es muy corta.")
+            QMessageBox.warning(self, "Error", "The drawn line is too short.")
             return
 
         u_c = v_c / L_px
         u_r = v_r / L_px
         
-        # Vector Normal
+        # Normal Vector
         n_c = -u_r
         n_r = u_c
 
-        # 3. Tamaño de la ROI en píxeles
+        # 3. ROI size in pixels
         half_width_um = self.spin_hw.value()
         half_width_m = half_width_um * 1e-6
         pixel_size_m = self.data_manager.pixel_size if self.data_manager.pixel_size > 0 else 1e-6
@@ -665,12 +665,12 @@ class CorrelationGui(QMainWindow):
         W = int(np.ceil(L_px))
         H = 2 * HW_px + 1
 
-        # 4. Meshgrid de coordenadas para la extracción (map_coordinates)
+        # 4. Coordinate meshgrid for extraction (map_coordinates)
         # cols = x, rows = y
         c_grid = c0 + u_c * np.arange(W).reshape(1, W) + n_c * (np.arange(H) - HW_px).reshape(H, 1)
         r_grid = r0 + u_r * np.arange(W).reshape(1, W) + n_r * (np.arange(H) - HW_px).reshape(H, 1)
 
-        # 5. Extraer matrices
+        # 5. Extract matrices
         sem_data_float = self.data_manager.sem_data.astype(float)
         roi_sem = ndi.map_coordinates(sem_data_float, [r_grid, c_grid], order=1, mode='nearest')
         
@@ -679,11 +679,11 @@ class CorrelationGui(QMainWindow):
             ebic_data_float = self.data_manager.current_map.astype(float)
             roi_ebic = ndi.map_coordinates(ebic_data_float, [r_grid, c_grid], order=1, mode='nearest')
 
-        # La línea manual en "coordenadas imagen de la ROI" es el centro a lo largo de W
-        # El JunctionAnalyzer espera la línea en PIXELES.
+        # The manual line in "ROI image coordinates" is the center along W
+        # The JunctionAnalyzer expects the line in PIXELS.
         manual_line_px = np.column_stack([c0 + u_c * np.arange(W), r0 + u_r * np.arange(W)])
 
-        # 6. Analizar
+        # 6. Analyze
         analyzer = JunctionAnalyzer(pixel_size_m=pixel_size_m)
         results = analyzer.detect(
             roi_sem, 
@@ -696,39 +696,39 @@ class CorrelationGui(QMainWindow):
         )
 
         if not results:
-            QMessageBox.warning(self, "Error", "Fallo durante la detección.")
+            QMessageBox.warning(self, "Error", "Detection failed.")
             return
 
         name, detected_coords_px, metrics = results[0]
 
-        # 7. Visualizar en el Analyzer (General image figure si está marcado)
+        # 7. Visualize in the Analyzer (General image figure if checked)
         if self.chk_d.isChecked():
             analyzer.visualize_results(self.data_manager.sem_data, manual_line_px, results)
 
-        # 8. Observar Junction directamente en la GUI
+        # 8. Observe Junction directly in GUI
         if self.chk_e.isChecked() and detected_coords_px is not None:
-            # Borrar la línea manual roja
+            # Delete the manual red line
             self.stored_lines[0].remove()
             self.stored_lines.clear()
             
-            # Borrar previa green line si la hubiera
+            # Delete previous green line if any
             if self.junction_line_artist:
                 try: self.junction_line_artist.remove()
                 except: pass
             
-            # Convertir las coordenadas de píxel encontradas a coordenadas Físicas GUI
+            # Convert found pixel coordinates to GUI Physical coordinates
             phys_x = detected_coords_px[:, 0] * self.pixel_size_phys
             phys_y = self.height_phys - (detected_coords_px[:, 1] * self.pixel_size_phys)
             
-            # Añadir línea verde final en la GUI
+            # Add final green line in GUI
             self.junction_line_artist = Line2D(phys_x, phys_y, color='#00FF00', linewidth=2.5)
             self.ax.add_line(self.junction_line_artist)
             self.canvas.draw()
             
-            msg = f"Junction detectada.\nMedia Dev: {metrics[0]:.2f} µm\nStd Dev: {metrics[1]:.2f} µm"
+            msg = f"Junction detected.\nMean Dev: {metrics[0]:.2f} µm\nStd Dev: {metrics[1]:.2f} µm"
             self.status_bar.showMessage(msg, 10000)
 
-    # --- ACCIONES ---
+    # --- ACTIONS ---
     def action_home_reset(self):
         if self.width_phys == 0: return 
 
@@ -763,14 +763,14 @@ class CorrelationGui(QMainWindow):
             if self.cbar:
                 self.cbar.ax.set_visible(self.show_overlay)
             
-            titulo_base = "Vista SEM (Frame 0)" if self.current_frame_idx == 0 else "Vista EBIC Raw (Frame 1)"
-            self.ax.set_title(titulo_base + (" + EBIC Overlay" if self.show_overlay else ""))
+            base_title = "SEM View (Frame 0)" if self.current_frame_idx == 0 else "Raw EBIC View (Frame 1)"
+            self.ax.set_title(base_title + (" + EBIC Overlay" if self.show_overlay else ""))
             self.canvas.draw()
 
     def update_layer_props(self, _=None):
         val = self.slider_opacity.value()
         self.opacity = val / 100.0
-        self.lbl_opacity.setText(f"Intensidad EBIC: {val}%")
+        self.lbl_opacity.setText(f"EBIC Intensity: {val}%")
         
         if self.layer_ebic:
             self.layer_ebic.set_alpha(self.opacity)
@@ -778,7 +778,7 @@ class CorrelationGui(QMainWindow):
             self.layer_ebic.set_cmap(cmap_name)
             self.canvas.draw()
 
-    # --- EVENTOS RATÓN ---
+    # --- MOUSE EVENTS ---
     def on_mouse_press(self, event):
         if event.inaxes != self.ax: return
         try:
@@ -786,7 +786,7 @@ class CorrelationGui(QMainWindow):
                 self.pan_start = (event.xdata, event.ydata)
                 self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
             elif self.mode == 'line':
-                # Si hay otra línea la quitamos para que solo haya 1
+                # Remove any existing line to ensure only 1 is drawn
                 if len(self.stored_lines) >= 1:
                     for l in self.stored_lines: l.remove()
                     self.stored_lines.clear()
@@ -820,9 +820,9 @@ class CorrelationGui(QMainWindow):
                 px_x = max(0, min(px_x, self.img_width - 1))
                 px_y = max(0, min(px_y, self.img_height - 1))
                 
-                self.lbl_coords.setText(f"X (px): {px_x}, Y (px): {px_y}")
+                self.lbl_coords.setText(f"Coordinates (Px): X {px_x}, Y {px_y}")
             else:
-                self.lbl_coords.setText("Coordenadas (Px): - , -")
+                self.lbl_coords.setText("Coordinates (Px): - , -")
                 return
 
             if self.mode == 'pan' and self.pan_start:
