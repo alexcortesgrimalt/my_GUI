@@ -1,19 +1,95 @@
 import numpy as np
 import cv2
+import csv
 import matplotlib.pyplot as plt
-from matplotlib.backend_bases import NavigationToolbar2
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.interpolate import interp1d, splrep, splev
 from scipy.stats import pearsonr
 
+from PyQt6.QtWidgets import (QMainWindow, QToolBar, QToolButton, QMenu, 
+                             QFileDialog, QMessageBox)
+from PyQt6.QtCore import Qt
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+
+class CustomFigureViewer(QMainWindow):
+    """Ventana PyQt6 personalizada para mostrar y guardar las figuras."""
+    def __init__(self, fig, window_title="Resultados del Análisis"):
+        super().__init__()
+        self.setWindowTitle(window_title)
+        self.resize(1000, 700)
+        self.fig = fig
+        
+        # Destruir la ventana de la memoria al cerrarla con la 'X'
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        
+        self.canvas = FigureCanvas(self.fig)
+        self.setCentralWidget(self.canvas)
+        
+        toolbar = QToolBar("Herramientas de Exportación")
+        toolbar.setMovable(False)
+        self.addToolBar(toolbar)
+        
+        save_button = QToolButton()
+        save_button.setText("Save")
+        save_button.setStyleSheet("font-weight: bold; padding: 5px;")
+        save_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        
+        save_menu = QMenu()
+        
+        action_png = save_menu.addAction("Save image (.png)")
+        action_png.triggered.connect(self.save_as_png)
+        
+        action_csv = save_menu.addAction("Save data (.csv)")
+        action_csv.triggered.connect(self.save_as_csv)
+        
+        save_button.setMenu(save_menu)
+        toolbar.addWidget(save_button)
+
+    def save_as_png(self):
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save Image", "", "PNG Image (*.png)")
+        if file_path:
+            if not file_path.lower().endswith('.png'):
+                file_path += '.png'
+            self.fig.savefig(file_path, dpi=300, bbox_inches='tight')
+            QMessageBox.information(self, "Éxito", "Imagen guardada correctamente.")
+
+    def save_as_csv(self):
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save Data", "", "CSV Data (*.csv)")
+        if file_path:
+            if not file_path.lower().endswith('.csv'):
+                file_path += '.csv'
+            try:
+                with open(file_path, 'w', newline='') as f:
+                    writer = csv.writer(f)
+                    for ax_idx, ax in enumerate(self.fig.get_axes()):
+                        if ax.get_label() == '<colorbar>': continue
+                            
+                        title = ax.get_title() or f"Plot {ax_idx+1}"
+                        
+                        # Extraer SOLAMENTE las líneas/vectores (plots)
+                        for line in ax.lines:
+                            label = line.get_label()
+                            if not label.startswith('_'):  
+                                writer.writerow([f"--- Line: {title} | {label} ---"])
+                                writer.writerow(["X (px)", "Y (px)"])
+                                for x, y in zip(line.get_xdata(), line.get_ydata()):
+                                    writer.writerow([x, y])
+                                writer.writerow([])
+                                
+                QMessageBox.information(self, "Éxito", "Vectores extraídos y guardados correctamente en CSV.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"No se pudo guardar el CSV:\n{str(e)}")
+
+
 class JunctionAnalyzer:
+    # Memoria global de la clase para evitar que Python cierre las ventanas automáticamente
+    _active_windows = []
 
     def __init__(self, pixel_size_m):
-        self.pixel_size_m = pixel_size_m  # meters per pixel
+        self.pixel_size_m = pixel_size_m  
         self._setup_plot_style()
 
     def _setup_plot_style(self):
-        """Aplica configuraciones globales para que las figuras se vean profesionales y restringe la toolbar."""
         plt.rcParams.update({
             'font.family': 'sans-serif',
             'font.size': 11,
@@ -27,16 +103,20 @@ class JunctionAnalyzer:
             'legend.edgecolor': '#cccccc'
         })
 
-        # --- RESTRICCIÓN DE LA BARRA DE HERRAMIENTAS ---
-        NavigationToolbar2.toolitems = (
-            ('Save', 'Save the figure', 'filesave', 'save_figure'),
-        )
+    def _show_custom_window(self, fig, title):
+        """Abre la figura y la guarda en la lista global para mantenerla viva."""
+        viewer = CustomFigureViewer(fig, title)
+        viewer.show()
+        # Mantenemos una referencia viva
+        JunctionAnalyzer._active_windows.append(viewer)
+        
+        # Limpieza simple de ventanas cerradas para no acumular memoria infinita
+        JunctionAnalyzer._active_windows = [w for w in JunctionAnalyzer._active_windows if w.isVisible()]
 
     def detect(self, roi, manual_line, roi_current=None, weight_current=10.0, 
                plot_a=False, plot_b=False, plot_c=False, sweep_weights=None, _sweep_call=False):
         h, w = roi.shape
 
-        # --- resample manual_line to match ROI width ---
         if len(manual_line) != w:
             t_manual = np.linspace(0.0, 1.0, len(manual_line))
             t_target = np.linspace(0.0, 1.0, w)
@@ -46,19 +126,15 @@ class JunctionAnalyzer:
         else:
             manual_line_rs = np.array(manual_line, dtype=float)
 
-        # -----------------------------------------------------------------
-        # Plot (A): SEM ROI - EBIC / Current ROI
-        # -----------------------------------------------------------------
+        # Plot (A)
         if plot_a:
             try:
                 if roi_current is not None:
-                    # Orientación dinámica basada en la relación de aspecto de la ROI
                     if w > h:
-                        fig, axes = plt.subplots(2, 1, figsize=(10, 8)) # Uno encima de otro
+                        fig, axes = plt.subplots(2, 1, figsize=(10, 8)) 
                     else:
-                        fig, axes = plt.subplots(1, 2, figsize=(14, 5)) # Uno al lado del otro
+                        fig, axes = plt.subplots(1, 2, figsize=(14, 5)) 
                     
-                    # SEM
                     im0 = axes[0].imshow(roi, cmap='gray', origin='upper', aspect='equal')
                     axes[0].set_title('SEM ROI (Topography)')
                     axes[0].set_xlabel('Width (pixels)')
@@ -67,7 +143,6 @@ class JunctionAnalyzer:
                     cax0 = div0.append_axes("right", size="3%", pad=0.1)
                     fig.colorbar(im0, cax=cax0).set_label('Intensity')
                     
-                    # EBIC
                     im1 = axes[1].imshow(roi_current, cmap='viridis', origin='upper', aspect='equal')
                     axes[1].set_title('EBIC / Current ROI')
                     axes[1].set_xlabel('Width (pixels)')
@@ -87,12 +162,11 @@ class JunctionAnalyzer:
                 
                 fig.suptitle("Region of Interest (ROI) Extraction (1:1 Aspect Ratio)", fontsize=15, y=0.98)
                 fig.tight_layout()
-                fig.show() 
+                self._show_custom_window(fig, "A) ROI Extraction")
             except Exception as e: print(e)
 
         results = []
 
-        # --- Method : Canny with Bilateral pre-filtering, with post-processing ---
         try:
             filtered_roi = self._apply_preprocessing_filter(roi)
             filtered_current = None
@@ -116,9 +190,7 @@ class JunctionAnalyzer:
             detected_image_coords = self._map_detected_to_image_coords(manual_line_rs, postprocessed_roi_coords, roi_height=h)
             metrics = self._compare_with_manual(manual_line_rs, detected_image_coords)
             
-            # -----------------------------------------------------------------
-            # Plot (B): Junction Detection Comparison
-            # -----------------------------------------------------------------
+            # Plot (B)
             if plot_b:
                 try:
                     fig, ax = plt.subplots(1, 1, figsize=(12, 6))
@@ -161,19 +233,16 @@ class JunctionAnalyzer:
                     ax.set_ylabel('ROI Height (pixels)')
                     ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5), fontsize='small')
                     fig.tight_layout()
-                    fig.show()
+                    self._show_custom_window(fig, "B) Detection Comparison")
                 except Exception as e: print(e)
 
-            # -----------------------------------------------------------------
-            # Plot (C): Raw vs Filtered EBIC
-            # -----------------------------------------------------------------
+            # Plot (C)
             if plot_c and roi_current is not None:
                 try:
-                    # Orientación dinámica basada en la relación de aspecto de la ROI
                     if w > h:
-                        fig2, axes2 = plt.subplots(2, 1, figsize=(10, 8)) # Uno encima de otro
+                        fig2, axes2 = plt.subplots(2, 1, figsize=(10, 8)) 
                     else:
-                        fig2, axes2 = plt.subplots(1, 2, figsize=(14, 5)) # Uno al lado del otro
+                        fig2, axes2 = plt.subplots(1, 2, figsize=(14, 5)) 
                     
                     im0 = axes2[0].imshow(roi_current, cmap='viridis', origin='upper', aspect='equal')
                     axes2[0].set_title('Raw EBIC ROI')
@@ -212,7 +281,7 @@ class JunctionAnalyzer:
                         
                     fig2.suptitle("Filtering Effect on EBIC Signal (1:1 Aspect Ratio)", fontsize=15, y=0.98)
                     fig2.tight_layout()
-                    fig2.show()
+                    self._show_custom_window(fig2, "C) EBIC Filtering")
                 except Exception as e: print(e)
 
             results.append(("Canny (Filtered, Spline)", detected_image_coords, metrics))
@@ -376,7 +445,6 @@ class JunctionAnalyzer:
         return mean_dev, std_dev, max_dev
 
     def visualize_results(self, image, manual_line, results):
-        """ Plot (D): General Result Over Main Image """
         for name, line_imgcoords, metrics in results:
             if len(metrics) == 4:
                 mean_dev, std_dev, max_dev, r2 = metrics
@@ -403,7 +471,7 @@ class JunctionAnalyzer:
             ax.legend(loc='best')
             fig.tight_layout()
             
-            fig.show() 
+            self._show_custom_window(fig, "D) General Results")
 
     def _fit_line_postprocessing(self, detected_coords):
         x = detected_coords[:, 0]
