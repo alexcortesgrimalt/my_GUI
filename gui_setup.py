@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QComboBox, QMenu, QToolButton, QTabWidget,
                              QDoubleSpinBox, QCheckBox, QMessageBox, QSpinBox,
                              QScrollArea, QGroupBox)
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QImage, QPixmap
 from PyQt6.QtCore import Qt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -27,6 +27,11 @@ class CorrelationGui(QMainWindow):
 
         # --- DATA MANAGER ---
         self.data_manager = SEMDataManager()
+        
+        # --- SWEEP DATA ---
+        self.sweep_data_manager = SEMDataManager()
+        self.sweep_dx = 0.0
+        self.sweep_dy = 0.0
 
         # --- VISUAL STATE ---
         self.img_width = 0
@@ -85,7 +90,6 @@ class CorrelationGui(QMainWindow):
         self.show_placeholder()
 
     def phys_to_px(self, px, py):
-        """Convierte coordenadas físicas del gráfico a píxeles de las matrices originales."""
         c = px / self.pixel_size_phys
         r = (self.height_phys - py) / self.pixel_size_phys
         return c, r
@@ -279,16 +283,14 @@ class CorrelationGui(QMainWindow):
         junc_layout.addWidget(lbl_inst_2)
         junc_layout.addWidget(self.spin_hw)
 
-        # --- AÑADE ESTE BLOQUE NUEVO ---
         junc_layout.addSpacing(10)
         lbl_ebic_weight = QLabel("3. EBIC Weight (for Detection):")
         self.spin_ebic_weight = QDoubleSpinBox()
         self.spin_ebic_weight.setRange(0.0, 1000.0)
         self.spin_ebic_weight.setSingleStep(1.0)
-        self.spin_ebic_weight.setValue(10.0)  # 10.0 por defecto
+        self.spin_ebic_weight.setValue(10.0) 
         junc_layout.addWidget(lbl_ebic_weight)
         junc_layout.addWidget(self.spin_ebic_weight)
-        # -------------------------------
         
         junc_layout.addSpacing(15)
         lbl_plots = QLabel("3. Select outputs:")
@@ -301,8 +303,6 @@ class CorrelationGui(QMainWindow):
         self.chk_d = QCheckBox("d) Canny (Filtered, Spline) - General")
         self.chk_e = QCheckBox("e) Draw Detected Junction (Over Main)")
         self.chk_e.setChecked(True) 
-        
-        # NUEVO CHECKBOX AÑADIDO: f) Observe Junction Profile
         self.chk_f = QCheckBox("f) Observe Junction Profile (1D Plot)")
         self.chk_f.setChecked(False)
 
@@ -311,7 +311,7 @@ class CorrelationGui(QMainWindow):
         junc_layout.addWidget(self.chk_c)
         junc_layout.addWidget(self.chk_d)
         junc_layout.addWidget(self.chk_e)
-        junc_layout.addWidget(self.chk_f) # Se añade a la UI
+        junc_layout.addWidget(self.chk_f) 
         
         junc_layout.addSpacing(15)
         self.btn_run_junction = QPushButton("OK")
@@ -367,7 +367,6 @@ class CorrelationGui(QMainWindow):
         lbl_prof_outs.setStyleSheet("font-weight: bold;")
         prof_layout.addWidget(lbl_prof_outs)
 
-        # Dynamic Checkbox Area for each Perpendicular
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_widget = QWidget()
@@ -384,11 +383,58 @@ class CorrelationGui(QMainWindow):
         self.btn_extract_profiles.clicked.connect(self.extract_profiles_data)
         prof_layout.addWidget(self.btn_extract_profiles)
 
+        # TAB 4: SWEEP
+        self.tab_sweep = QWidget()
+        sweep_layout = QVBoxLayout(self.tab_sweep)
+        
+        lbl_sweep_title = QLabel("Sweep / Drift Correction")
+        lbl_sweep_title.setStyleSheet("font-weight: bold; font-size: 14px;")
+        sweep_layout.addWidget(lbl_sweep_title)
+        sweep_layout.addSpacing(10)
+        
+        lbl_sweep_inst1 = QLabel("1. Load image at different voltage:")
+        sweep_layout.addWidget(lbl_sweep_inst1)
+        
+        self.btn_load_sweep = QPushButton("Load Sweep TIF")
+        self.btn_load_sweep.clicked.connect(self.load_sweep_image)
+        sweep_layout.addWidget(self.btn_load_sweep)
+        
+        self.lbl_sweep_status = QLabel("Status: No sweep image loaded")
+        self.lbl_sweep_status.setStyleSheet("color: #555;")
+        sweep_layout.addWidget(self.lbl_sweep_status)
+        
+        # --- NUEVO: PREVISUALIZACIÓN DE IMAGEN ---
+        self.lbl_sweep_preview = QLabel("No image preview")
+        self.lbl_sweep_preview.setFixedSize(260, 200)
+        self.lbl_sweep_preview.setStyleSheet("background-color: #dcdcdc; border: 1px solid #aaa;")
+        self.lbl_sweep_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sweep_layout.addWidget(self.lbl_sweep_preview)
+        # -----------------------------------------
+
+        sweep_layout.addSpacing(15)
+
+        lbl_sweep_inst2 = QLabel("2. Run Image Cross-Correlation:")
+        sweep_layout.addWidget(lbl_sweep_inst2)
+        
+        self.btn_detect_sweep = QPushButton("Detect Sweep")
+        self.btn_detect_sweep.setStyleSheet("QPushButton { font-weight: bold; background-color: #ffeeba; padding: 6px; }")
+        self.btn_detect_sweep.clicked.connect(self.detect_sweep)
+        sweep_layout.addWidget(self.btn_detect_sweep)
+        sweep_layout.addSpacing(10)
+        
+        self.btn_check_sweep = QPushButton("Check Sweep (Visualize)")
+        self.btn_check_sweep.setStyleSheet("QPushButton { font-weight: bold; background-color: #d1e7dd; padding: 6px; }")
+        self.btn_check_sweep.clicked.connect(self.check_sweep)
+        self.btn_check_sweep.setEnabled(False)
+        sweep_layout.addWidget(self.btn_check_sweep)
+        
+        sweep_layout.addStretch()
 
         # Add tabs
         self.tabs_right.addTab(self.tab_vis, "Vis")
         self.tabs_right.addTab(self.tab_junc, "Junction")
         self.tabs_right.addTab(self.tab_prof, "Profiles")
+        self.tabs_right.addTab(self.tab_sweep, "Sweep")
         
         self.right_layout.addWidget(self.tabs_right)
         self.main_layout.addWidget(self.right_panel)
@@ -487,7 +533,7 @@ class CorrelationGui(QMainWindow):
             self.update_frame_ui()
             self.canvas.draw()
 
-    # --- AUTOMATIC SCALE BAR CALCULATION (DYNAMIC WITH ZOOM) ---
+    # --- AUTOMATIC SCALE BAR CALCULATION ---
     def draw_scale_bar(self):
         if self.width_phys == 0: return
         
@@ -619,7 +665,6 @@ class CorrelationGui(QMainWindow):
         if hasattr(self, 'profile_manager'):
             self.profile_manager.clear()
             
-        # Limpiar interfaz de perfiles
         if hasattr(self, 'scroll_layout'):
             for i in reversed(range(self.scroll_layout.count())):
                 widget = self.scroll_layout.itemAt(i).widget()
@@ -656,6 +701,16 @@ class CorrelationGui(QMainWindow):
         self.btn_line.setChecked(False)
         self.tool_group.setExclusive(True)
         self.canvas.setCursor(Qt.CursorShape.ArrowCursor)
+
+        self.sweep_data_manager = SEMDataManager()
+        self.sweep_dx = 0.0
+        self.sweep_dy = 0.0
+        self.lbl_sweep_status.setText("Status: No sweep image loaded")
+        self.btn_check_sweep.setEnabled(False)
+
+        # --- NUEVO: LIMPIAR PREVISUALIZACIÓN ---
+        self.lbl_sweep_preview.clear()
+        self.lbl_sweep_preview.setText("No image preview")
 
         self.show_placeholder()
 
@@ -794,7 +849,6 @@ class CorrelationGui(QMainWindow):
         if self.chk_d.isChecked():
             analyzer.visualize_results(self.data_manager.sem_data, manual_line_px, results)
             
-        # NUEVA FUNCIONALIDAD: f) Observe Junction Profile (Native)
         if self.chk_f.isChecked() and detected_coords_px is not None:
             self.observe_junction_profile(detected_coords_px)
             
@@ -817,18 +871,15 @@ class CorrelationGui(QMainWindow):
             self.status_bar.showMessage(msg, 10000)
 
     def observe_junction_profile(self, coords_px):
-        """Replicación exacta del '_observe_detected_junction_button' original."""
         if coords_px is None or len(coords_px) == 0:
             return
 
-        # 1. Extraer coordenadas (X, Y)
         xs = coords_px[:, 0]
         ys = coords_px[:, 1]
 
         sem_data = self.data_manager.sem_data.astype(float)
         cur_map = self.data_manager.current_map
 
-        # 2. Interpolar valores SEM a lo largo de las coordenadas
         sem_vals = ndi.map_coordinates(sem_data, [ys, xs], order=1, mode='nearest')
         
         cur_vals = None
@@ -836,17 +887,12 @@ class CorrelationGui(QMainWindow):
             cur_map_float = cur_map.astype(float)
             cur_vals = ndi.map_coordinates(cur_map_float, [ys, xs], order=1, mode='nearest')
 
-        # 3. Calcular la distancia acumulada en la unidad física actual
         diffs = np.sqrt(np.sum(np.diff(coords_px, axis=0) ** 2, axis=1))
         dists_px = np.concatenate(([0.0], np.cumsum(diffs)))
-        
-        # En el nuevo GUI, pixel_size_phys ya está escalado a la unidad correcta (um o nm)
         dists_phys = dists_px * self.pixel_size_phys
 
-        # 4. Normalizar SEM
         sem_norm = (sem_vals - np.min(sem_vals)) / (np.ptp(sem_vals) + 1e-12)
 
-        # 5. Crear la gráfica (Twin-X) exactamente igual al original
         fig, ax1 = plt.subplots(figsize=(8, 4))
         ax1.plot(dists_phys, sem_norm, color='tab:blue', linewidth=2, label='SEM (norm)')
         ax1.set_xlabel(f'Distance along junction ({self.unit_label})')
@@ -862,8 +908,6 @@ class CorrelationGui(QMainWindow):
         ax1.set_title("Profile Along Detected Junction")
         ax1.grid(True)
         fig.tight_layout()
-        
-        # Mostrar la gráfica sin bloquear el hilo principal de PyQt6
         fig.show()
 
     # --- PROFILES FUNCTIONALITY ---
@@ -903,7 +947,6 @@ class CorrelationGui(QMainWindow):
         )
         self.set_mode("view") 
 
-        # Crear dinámicamente el listado de CheckBoxes
         for i in reversed(range(self.scroll_layout.count())):
             widget = self.scroll_layout.itemAt(i).widget()
             if widget: 
@@ -947,13 +990,11 @@ class CorrelationGui(QMainWindow):
             QMessageBox.warning(self, "Error", "No profiles generated yet.")
             return
 
-        # Limpiar referencias de ventanas viejas que ya estén cerradas
         self.plot_windows = [w for w in self.plot_windows if w.isVisible()]
 
         for prof in self.profile_manager.profiles:
             ui_elements = self.profile_checkboxes.get(prof.idx)
             
-            # Si el grupo completo está desactivado o no existe, lo saltamos
             if not ui_elements or not ui_elements['group'].isChecked():
                 continue
                 
@@ -963,16 +1004,13 @@ class CorrelationGui(QMainWindow):
             if ui_elements['ln_i'].isChecked(): selected_keys.append('ln_i')
             if ui_elements['deriv'].isChecked(): selected_keys.append('deriv')
             
-            # Si no hay checkboxes de métricas marcados dentro del grupo, lo saltamos
             if not selected_keys: 
                 continue
                 
-            # Extraer las coordenadas físicas de P1 y P2 de la línea
             x_data, y_data = prof.line.get_data()
             P1x, P1y = x_data[0], y_data[0]
             P2x, P2y = x_data[2], y_data[2]
             
-            # Pasar a píxeles puros para extraer datos
             c1, r1 = self.phys_to_px(P1x, P1y)
             c2, r2 = self.phys_to_px(P2x, P2y)
             
@@ -991,10 +1029,8 @@ class CorrelationGui(QMainWindow):
             sem_prof = ndi.map_coordinates(sem_data, [r_vals, c_vals], order=1, mode='nearest')
             ebic_prof = ndi.map_coordinates(ebic_data, [r_vals, c_vals], order=1, mode='nearest')
             
-            # Crear el vector de distancias X basado en la longitud física original
             dist_um = np.linspace(0, np.hypot(P2x - P1x, P2y - P1y), N)
             
-            # Crear y abrir la ventana solo para este perfil
             win = ProfilePlotWindow(prof.idx, dist_um, sem_prof, ebic_prof, selected_keys, self.unit_label)
             win.show()
             self.plot_windows.append(win)
@@ -1161,3 +1197,137 @@ class CorrelationGui(QMainWindow):
             self.draw_scale_bar()
             self.canvas.draw()
         except: pass
+
+    # ==========================================================
+    # --- SWEEP LOGIC (Cross-Correlation) ---
+    # ==========================================================
+    def load_sweep_image(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Load Sweep TIF", "", "TIF Files (*.tif *.tiff)")
+        if file_path:
+            success = self.sweep_data_manager.load_file(file_path)
+            if success:
+                self.lbl_sweep_status.setText(f"Status: Loaded -> {file_path.split('/')[-1]}")
+                self.btn_check_sweep.setEnabled(False)
+                
+                # --- NUEVO: RENDERIZAR LA PREVISUALIZACIÓN ---
+                if self.sweep_data_manager.sem_data is not None:
+                    data = self.sweep_data_manager.sem_data
+                    
+                    # Normalizar los datos de la matriz a 0-255 (escala de grises 8-bit)
+                    vmin = np.nanmin(data)
+                    vmax = np.nanmax(data)
+                    if vmax > vmin:
+                        norm_data = (255 * (data - vmin) / (vmax - vmin)).astype(np.uint8)
+                    else:
+                        norm_data = np.zeros_like(data, dtype=np.uint8)
+                    
+                    height, width = norm_data.shape
+                    bytes_per_line = width
+                    
+                    # Crear QImage y convertir a QPixmap
+                    q_img = QImage(norm_data.data, width, height, bytes_per_line, QImage.Format.Format_Grayscale8)
+                    pixmap = QPixmap.fromImage(q_img)
+                    
+                    # Escalar manteniendo la proporción de aspecto
+                    self.lbl_sweep_preview.setPixmap(pixmap.scaled(
+                        self.lbl_sweep_preview.size(), 
+                        Qt.AspectRatioMode.KeepAspectRatio, 
+                        Qt.TransformationMode.SmoothTransformation
+                    ))
+            else:
+                QMessageBox.warning(self, "Error", "Failed to load sweep image.")
+
+
+    def _estimate_translation(self, ref, img):
+        """
+        Estimate (dx, dy) pixel shift to map ref coords to img coords
+        using FFT cross-correlation (or OpenCV phaseCorrelate if available).
+        """
+        def make_composite(sem_img):
+            a = np.asarray(sem_img, dtype=float)
+            return (a - np.mean(a)) / (np.std(a) + 1e-12)
+
+        A = make_composite(ref)
+        B = make_composite(img)
+
+        # Crop to common shape if sizes differ
+        if A.shape != B.shape:
+            minr = min(A.shape[0], B.shape[0])
+            minc = min(A.shape[1], B.shape[1])
+            A = A[:minr, :minc]
+            B = B[:minr, :minc]
+
+        # Try OpenCV phaseCorrelate for subpixel accuracy
+        try:
+            import cv2
+            A32 = np.float32(A)
+            B32 = np.float32(B)
+            try:
+                win = cv2.createHanningWindow(A32.shape[::-1], cv2.CV_32F)
+                Aw = A32 * win
+                Bw = B32 * win
+            except Exception:
+                Aw = A32
+                Bw = B32
+            shift, _ = cv2.phaseCorrelate(Aw, Bw)
+            return float(shift[0]), float(shift[1])
+        except Exception:
+            # Fallback: integer-pixel FFT cross-correlation
+            fa = np.fft.fft2(A - np.mean(A))
+            fb = np.fft.fft2(B - np.mean(B))
+            cross = np.fft.ifft2(fa * np.conj(fb))
+            cross_abs = np.abs(cross)
+            shift_y, shift_x = np.unravel_index(np.argmax(cross_abs), cross_abs.shape)
+            
+            if shift_x > cross.shape[1] // 2:
+                shift_x -= cross.shape[1]
+            if shift_y > cross.shape[0] // 2:
+                shift_y -= cross.shape[0]
+            
+            return float(shift_x), float(shift_y)
+
+    def detect_sweep(self):
+        if self.data_manager.sem_data is None or self.sweep_data_manager.sem_data is None:
+            QMessageBox.warning(self, "Error", "Load both Base and Sweep images first.")
+            return
+
+        self.status_bar.showMessage("Computing global pixel shift using FFT... Please wait.", 5000)
+        
+        try:
+            dx, dy = self._estimate_translation(
+                self.data_manager.sem_data, 
+                self.sweep_data_manager.sem_data
+            )
+            
+            self.sweep_dx = dx
+            self.sweep_dy = dy
+            
+            self.btn_check_sweep.setEnabled(True)
+            self.status_bar.showMessage(f"Sweep Detection Complete! Shift: dx={dx:.2f}, dy={dy:.2f}", 5000)
+            QMessageBox.information(self, "Success", f"Shift found: X={dx:.2f}px, Y={dy:.2f}px.\nYou can now check the alignment.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to compute shift:\n{e}")
+
+    def check_sweep(self):
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharex=True, sharey=True)
+        
+        base_img = self.data_manager.sem_data
+        sweep_img = self.sweep_data_manager.sem_data
+        
+        # 1. Base Image
+        axes[0].imshow(base_img, cmap='gray')
+        axes[0].set_title("1. Base Image (Reference)")
+        
+        # 2. Sweep Image (Uncorrected)
+        axes[1].imshow(sweep_img, cmap='gray')
+        axes[1].set_title("2. Sweep Image (Drifted)")
+        
+        # 3. Sweep Image (Shifted back to align with Base)
+        # We shift the drifted image by (-dx, -dy) to match the reference.
+        shifted_sweep = ndi.shift(sweep_img, shift=(-self.sweep_dy, -self.sweep_dx), mode='nearest')
+        
+        axes[2].imshow(shifted_sweep, cmap='gray')
+        axes[2].set_title(f"3. Sweep Corrected (Shift: {-self.sweep_dx:.1f}, {-self.sweep_dy:.1f})")
+
+        fig.tight_layout()
+        fig.show()
