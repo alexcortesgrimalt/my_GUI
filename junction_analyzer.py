@@ -354,14 +354,19 @@ class JunctionAnalyzer:
         return cv2.bilateralFilter(normalized_roi, d=9, sigmaColor=75, sigmaSpace=9)
 
     def _apply_spline_postprocessing(self, detected_coords):
-        t = np.linspace(0, 1, len(detected_coords))
-        tck_x = splrep(t, detected_coords[:, 0], s=0.5) 
-        tck_y = splrep(t, detected_coords[:, 1], s=0.5)
-        t_smooth = np.linspace(0, 1, 1000)
-        x_smooth = splev(t_smooth, tck_x)
-        y_smooth = splev(t_smooth, tck_y)
+        """Ajuste de curva (Spline) que mantiene exactamente 'W' puntos para el mapeo"""
+        W = len(detected_coords)
+        t = np.linspace(0, 1, W)
+        
+        # El parámetro 's' controla la rigidez. s=W suele ser un buen balance.
+        tck_x = splrep(t, detected_coords[:, 0], s=W) 
+        tck_y = splrep(t, detected_coords[:, 1], s=W)
+        
+        # Evaluamos la curva suave en exactamente los mismos N puntos originales
+        x_smooth = splev(t, tck_x)
+        y_smooth = splev(t, tck_y)
         return np.column_stack([x_smooth, y_smooth])
-
+    
     def compute_gradient_stats(self, roi, roi_current):
         sem = roi.astype(float)
         cur = roi_current.astype(float)

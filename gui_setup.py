@@ -17,6 +17,7 @@ import scipy.ndimage as ndi
 from image_handler import SEMDataManager
 from junction_analyzer import JunctionAnalyzer
 from profile_manager import ProfileManager, ProfilePlotWindow
+import matplotlib.pyplot as plt
 
 class CorrelationGui(QMainWindow):
     def __init__(self):
@@ -277,6 +278,17 @@ class CorrelationGui(QMainWindow):
         self.spin_hw.setValue(1.0)
         junc_layout.addWidget(lbl_inst_2)
         junc_layout.addWidget(self.spin_hw)
+
+        # --- AÑADE ESTE BLOQUE NUEVO ---
+        junc_layout.addSpacing(10)
+        lbl_ebic_weight = QLabel("3. EBIC Weight (for Detection):")
+        self.spin_ebic_weight = QDoubleSpinBox()
+        self.spin_ebic_weight.setRange(0.0, 1000.0)
+        self.spin_ebic_weight.setSingleStep(1.0)
+        self.spin_ebic_weight.setValue(10.0)  # 10.0 por defecto
+        junc_layout.addWidget(lbl_ebic_weight)
+        junc_layout.addWidget(self.spin_ebic_weight)
+        # -------------------------------
         
         junc_layout.addSpacing(15)
         lbl_plots = QLabel("3. Select outputs:")
@@ -761,13 +773,13 @@ class CorrelationGui(QMainWindow):
             roi_ebic = ndi.map_coordinates(ebic_data_float, [r_grid, c_grid], order=1, mode='nearest')
 
         manual_line_px = np.column_stack([c0 + u_c * np.arange(W), r0 + u_r * np.arange(W)])
-
+        ebic_w = self.spin_ebic_weight.value()
         analyzer = JunctionAnalyzer(pixel_size_m=pixel_size_m)
         results = analyzer.detect(
             roi_sem, 
             manual_line_px, 
             roi_current=roi_ebic, 
-            weight_current=10.0,
+            weight_current=ebic_w,
             plot_a=self.chk_a.isChecked(),
             plot_b=self.chk_b.isChecked(),
             plot_c=self.chk_c.isChecked()
@@ -782,14 +794,10 @@ class CorrelationGui(QMainWindow):
         if self.chk_d.isChecked():
             analyzer.visualize_results(self.data_manager.sem_data, manual_line_px, results)
             
-        # NUEVA FUNCIONALIDAD: f) Observe Junction Profile (Llama a tu nuevo método en JunctionAnalyzer)
+        # NUEVA FUNCIONALIDAD: f) Observe Junction Profile (Native)
         if self.chk_f.isChecked() and detected_coords_px is not None:
-            analyzer.observe_junction(
-                image=self.data_manager.sem_data,
-                detected_coords=detected_coords_px,
-                image_current=self.data_manager.current_map
-            )
-
+            self.observe_junction_profile(detected_coords_px)
+            
         if self.chk_e.isChecked() and detected_coords_px is not None:
             self.stored_lines[0].remove()
             self.stored_lines.clear()
@@ -807,6 +815,56 @@ class CorrelationGui(QMainWindow):
             
             msg = f"Junction detected.\nMean Dev: {metrics[0]:.2f} µm\nStd Dev: {metrics[1]:.2f} µm"
             self.status_bar.showMessage(msg, 10000)
+
+    def observe_junction_profile(self, coords_px):
+        """Replicación exacta del '_observe_detected_junction_button' original."""
+        if coords_px is None or len(coords_px) == 0:
+            return
+
+        # 1. Extraer coordenadas (X, Y)
+        xs = coords_px[:, 0]
+        ys = coords_px[:, 1]
+
+        sem_data = self.data_manager.sem_data.astype(float)
+        cur_map = self.data_manager.current_map
+
+        # 2. Interpolar valores SEM a lo largo de las coordenadas
+        sem_vals = ndi.map_coordinates(sem_data, [ys, xs], order=1, mode='nearest')
+        
+        cur_vals = None
+        if cur_map is not None:
+            cur_map_float = cur_map.astype(float)
+            cur_vals = ndi.map_coordinates(cur_map_float, [ys, xs], order=1, mode='nearest')
+
+        # 3. Calcular la distancia acumulada en la unidad física actual
+        diffs = np.sqrt(np.sum(np.diff(coords_px, axis=0) ** 2, axis=1))
+        dists_px = np.concatenate(([0.0], np.cumsum(diffs)))
+        
+        # En el nuevo GUI, pixel_size_phys ya está escalado a la unidad correcta (um o nm)
+        dists_phys = dists_px * self.pixel_size_phys
+
+        # 4. Normalizar SEM
+        sem_norm = (sem_vals - np.min(sem_vals)) / (np.ptp(sem_vals) + 1e-12)
+
+        # 5. Crear la gráfica (Twin-X) exactamente igual al original
+        fig, ax1 = plt.subplots(figsize=(8, 4))
+        ax1.plot(dists_phys, sem_norm, color='tab:blue', linewidth=2, label='SEM (norm)')
+        ax1.set_xlabel(f'Distance along junction ({self.unit_label})')
+        ax1.set_ylabel('SEM (norm)', color='tab:blue')
+        ax1.tick_params(axis='y', labelcolor='tab:blue')
+
+        if cur_vals is not None:
+            ax2 = ax1.twinx()
+            ax2.plot(dists_phys, cur_vals, color='tab:red', linewidth=1.5, label='Current (nA)')
+            ax2.set_ylabel('Current (nA)', color='tab:red')
+            ax2.tick_params(axis='y', labelcolor='tab:red')
+
+        ax1.set_title("Profile Along Detected Junction")
+        ax1.grid(True)
+        fig.tight_layout()
+        
+        # Mostrar la gráfica sin bloquear el hilo principal de PyQt6
+        fig.show()
 
     # --- PROFILES FUNCTIONALITY ---
     def generate_profiles_action(self):
