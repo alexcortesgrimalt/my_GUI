@@ -471,7 +471,8 @@ class CorrelationGui(QMainWindow):
             "LOAD INSTRUCTIONS:\n"
             "Please load a multi-page .tif file containing:\n"
             "  • 1st Image: SEM topography image.\n"
-            "  • 2nd Image: EBIC current map."
+            "  • 2nd Image: EBIC current map.\n"
+            "  • Metadata: Embedded XML with physical dimensions and conversion parameters."
         )
         
         self.ax.text(0.5, 0.5, instructions_text, 

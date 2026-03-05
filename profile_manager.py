@@ -2,9 +2,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-from PyQt6.QtWidgets import QMainWindow, QToolBar, QFileDialog
+from PyQt6.QtWidgets import (QMainWindow, QToolBar, QFileDialog, QMessageBox, QDialog,
+                             QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QDoubleSpinBox, QPushButton)
 from PyQt6.QtGui import QAction
 from PyQt6.QtCore import Qt
+from perpendicular_fitting import PerpendicularFitter
 
 def gradient_with_window(x, y, window=9):
     """
@@ -54,6 +56,22 @@ class ProfilePlotWindow(QMainWindow):
         csv_action.triggered.connect(self.save_csv)
         toolbar.addAction(csv_action)
         
+        # Barra de herramientas para fitting
+        fitting_toolbar = QToolBar("Fitting Tools")
+        self.addToolBar(fitting_toolbar)
+        
+        param_action = QAction("Configure Fit Parameters", self)
+        param_action.triggered.connect(self._on_configure_parameters)
+        fitting_toolbar.addAction(param_action)
+        
+        fit_action = QAction("Fit & Extract", self)
+        fit_action.triggered.connect(self._on_fit_properties)
+        fitting_toolbar.addAction(fit_action)
+        
+        save_props_action = QAction("Save Properties (.csv)", self)
+        save_props_action.triggered.connect(self.save_properties)
+        fitting_toolbar.addAction(save_props_action)
+        
         # Asegurarnos de que axes sea iterable
         if len(selected_keys) == 1:
             ax_list = [self.axes]
@@ -64,6 +82,9 @@ class ProfilePlotWindow(QMainWindow):
         self.dist = dist
         self.sem_norm = (sem - np.min(sem)) / (np.ptp(sem) + 1e-12)
         self.abs_i = np.abs(ebic)
+        
+        # Storage for fit results
+        self.properties = None
         
         pos = self.abs_i[self.abs_i > 0]
         floor = max(np.min(pos) * 0.1, 1e-12) if pos.size > 0 else 1e-12
@@ -99,6 +120,9 @@ class ProfilePlotWindow(QMainWindow):
         self.fig.suptitle(f"Profile Extraction: Perpendicular {prof_idx}", fontsize=14, fontweight='bold')
         self.fig.tight_layout()
         
+        # Find and store the ln_i axis for plotting fits
+        self._find_ln_i_axis(selected_keys)
+        
     def save_plot(self):
         path, _ = QFileDialog.getSaveFileName(self, "Save Plot", f"Perpendicular_{self.windowTitle().split()[1]}.png", "PNG (*.png)")
         if path: self.fig.savefig(path, dpi=300, bbox_inches='tight')
@@ -109,6 +133,230 @@ class ProfilePlotWindow(QMainWindow):
             header = "Distance,SEM_norm,abs_I,ln_abs_I,deriv_ln_I"
             data = np.column_stack([self.dist, self.sem_norm, self.abs_i, self.ln_i, self.deriv])
             np.savetxt(path, data, delimiter=',', header=header, comments='', fmt='%.6e')
+    
+    def _find_ln_i_axis(self, selected_keys):
+        """Find and store the axis that displays ln(I) for fit plotting."""
+        self.ln_i_axis = None
+        self.ln_i_axis_idx = None
+        
+        if len(selected_keys) == 1:
+            ax_list = [self.axes]
+        else:
+            ax_list = self.axes
+        
+        for idx, key in enumerate(selected_keys):
+            if key == 'ln_i':
+                self.ln_i_axis = ax_list[idx]
+                self.ln_i_axis_idx = idx
+                break
+    
+    def _on_configure_parameters(self):
+        """Callback to show the parameter configuration dialog."""
+        if self.show_fitting_parameters_dialog():
+            QMessageBox.information(self, 'Parameters Updated',
+                                  'Fitting parameters have been updated.\nNew settings will be used for the next fit.')
+    
+    def _on_fit_properties(self):
+        """Callback to run fitting with current parameters."""
+        self.fit_properties()
+    
+    def show_fitting_parameters_dialog(self):
+        """Show dialog for adjusting fitting parameters."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Fitting Parameters')
+        dialog.setGeometry(100, 100, 400, 350)
+        
+        layout = QVBoxLayout()
+        
+        # Min points
+        layout.addWidget(QLabel("Minimum points for fit:"))
+        spin_min_pts = QSpinBox()
+        spin_min_pts.setMinimum(3)
+        spin_min_pts.setMaximum(50)
+        spin_min_pts.setValue(getattr(self, '_fit_min_points', 6))
+        layout.addWidget(spin_min_pts)
+        
+        # Skip near junction
+        layout.addWidget(QLabel("Points to skip near junction:"))
+        spin_skip = QSpinBox()
+        spin_skip.setMinimum(0)
+        spin_skip.setMaximum(20)
+        spin_skip.setValue(getattr(self, '_fit_skip_near', 3))
+        layout.addWidget(spin_skip)
+        
+        # SNR threshold
+        layout.addWidget(QLabel("SNR threshold for tail truncation:"))
+        spin_snr = QDoubleSpinBox()
+        spin_snr.setMinimum(0.5)
+        spin_snr.setMaximum(10.0)
+        spin_snr.setSingleStep(0.5)
+        spin_snr.setValue(getattr(self, '_fit_snr_threshold', 3.0))
+        layout.addWidget(spin_snr)
+        
+        # SCR width
+        layout.addWidget(QLabel("SCR width estimate (µm, 0=auto):"))
+        spin_scr = QDoubleSpinBox()
+        spin_scr.setMinimum(0.0)
+        spin_scr.setMaximum(5.0)
+        spin_scr.setSingleStep(0.1)
+        spin_scr.setValue(getattr(self, '_fit_scr_width', 0.0))
+        layout.addWidget(spin_scr)
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_ok = QPushButton("Fit with These Parameters")
+        btn_cancel = QPushButton("Cancel")
+        btn_layout.addWidget(btn_ok)
+        btn_layout.addWidget(btn_cancel)
+        layout.addLayout(btn_layout)
+        
+        # Connect buttons
+        def on_ok():
+            self._fit_min_points = spin_min_pts.value()
+            self._fit_skip_near = spin_skip.value()
+            self._fit_snr_threshold = spin_snr.value()
+            scr_w = spin_scr.value()
+            self._fit_scr_width = scr_w if scr_w > 0 else None
+            dialog.accept()
+        
+        btn_ok.clicked.connect(on_ok)
+        btn_cancel.clicked.connect(dialog.reject)
+        
+        dialog.setLayout(layout)
+        return dialog.exec() == QDialog.DialogCode.Accepted
+    
+    def fit_properties(self, min_points=6, skip_near=3, snr_threshold=3.0, 
+                      scr_width=None, fit_method='linear_log', pixel_size=1.0):
+        """Run PerpendicularFitter on this window's profile with adjustable parameters.
+        
+        Parameters can be overridden via instance attributes set by dialog.
+        Plots the fit lines on the ln(I) axis if available.
+        """
+        # Use stored parameters if they exist
+        min_points = getattr(self, '_fit_min_points', min_points)
+        skip_near = getattr(self, '_fit_skip_near', skip_near)
+        snr_threshold = getattr(self, '_fit_snr_threshold', snr_threshold)
+        scr_width = getattr(self, '_fit_scr_width', scr_width)
+        fit_method = getattr(self, '_fit_method', fit_method)
+        pixel_size = getattr(self, '_fit_pixel_size', pixel_size)
+        
+        try:
+            fitter = PerpendicularFitter(
+                min_points=min_points,
+                skip_near_junction=skip_near,
+                snr_threshold=snr_threshold,
+                scr_width_estimate=scr_width,
+                fit_method=fit_method,
+                pixel_size_um=pixel_size
+            )
+            res = fitter.fit_profile(self.dist, self.abs_i, show_debug=False)
+            self.properties = res
+            
+            if self.ln_i_axis is not None:
+                self._plot_fits(res)
+            
+            left = res.get('left')
+            right = res.get('right')
+            msg = f"Junction @ {res.get('junction_pos', 0):.6g} µm\n"
+            msg += f"Estimated SCR width: {res.get('scr_width', 0):.4g} µm\n\n"
+            
+            if left:
+                msg += f"Left side:\n"
+                msg += f"  Slope: {left.get('slope'):.4g}\n"
+                msg += f"  R² = {left.get('r2'):.3f}\n"
+                msg += f"  Diffusion length: {left.get('inv_length'):.4g} µm\n"
+            else:
+                msg += "Left fit: insufficient data\n"
+            
+            if right:
+                msg += f"\nRight side:\n"
+                msg += f"  Slope: {right.get('slope'):.4g}\n"
+                msg += f"  R² = {right.get('r2'):.3f}\n"
+                msg += f"  Collection length: {right.get('inv_length'):.4g} µm\n"
+            else:
+                msg += "\nRight fit: insufficient data\n"
+            
+            if res.get('depletion_width') is not None:
+                msg += f"\nEstimated depletion width: {res.get('depletion_width'):.4g} µm"
+            
+            QMessageBox.information(self, 'Fit Results', msg)
+            return res
+        except Exception as e:
+            QMessageBox.critical(self, 'Fit Error', f'Fitting failed:\n{str(e)}')
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def _plot_fits(self, result):
+        """Plot the linear fits on the ln(I) axis."""
+        if self.ln_i_axis is None:
+            return
+        
+        junction_pos = result.get('junction_pos', 0)
+        left = result.get('left')
+        right = result.get('right')
+        
+        if left is not None and left.get('x_fit') is not None:
+            x_fit_rel = left['x_fit']
+            y_fit = left.get('y_fit')
+            x_fit_abs = junction_pos - x_fit_rel
+            if y_fit is not None:
+                self.ln_i_axis.plot(x_fit_abs, y_fit, '--', color='blue', lw=2.5, alpha=0.85, label='Left fit', zorder=5)
+        
+        if right is not None and right.get('x_fit') is not None:
+            x_fit_rel = right['x_fit']
+            y_fit = right.get('y_fit')
+            x_fit_abs = junction_pos + x_fit_rel
+            if y_fit is not None:
+                self.ln_i_axis.plot(x_fit_abs, y_fit, '--', color='red', lw=2.5, alpha=0.85, label='Right fit', zorder=5)
+        
+        self.ln_i_axis.axvline(junction_pos, color='green', linestyle=':', lw=2, alpha=0.7, label='Junction', zorder=4)
+        
+        handles, labels = self.ln_i_axis.get_legend_handles_labels()
+        if len(set(labels)) > 0:
+            self.ln_i_axis.legend(loc='best', fontsize=9, framealpha=0.9)
+        
+        self.canvas.draw()
+    
+    def save_properties(self):
+        """Save last-fit properties to CSV; if none, run fit first."""
+        if not hasattr(self, 'properties') or self.properties is None:
+            self.fit_properties()
+        
+        props = getattr(self, 'properties', None)
+        if props is None:
+            QMessageBox.warning(self, 'Warning', 'No properties to save. Run fit first.')
+            return
+        
+        path, _ = QFileDialog.getSaveFileName(
+            self, 
+            'Save Properties', 
+            f'Perpendicular_{self.windowTitle().split()[1]}_props.csv', 
+            'CSV (*.csv)'
+        )
+        if not path:
+            return
+        
+        def _fmt_side(d):
+            if d is None:
+                return (np.nan, np.nan, np.nan)
+            return (d.get('slope', np.nan), d.get('r2', np.nan), d.get('inv_length', np.nan))
+        
+        l_slope, l_r2, l_inv = _fmt_side(props.get('left'))
+        r_slope, r_r2, r_inv = _fmt_side(props.get('right'))
+        
+        header = 'junction_pos,left_slope,left_r2,left_inv_length,right_slope,right_r2,right_inv_length,left_start,right_start,depletion_width'
+        data = np.array([[
+            props.get('junction_pos', np.nan),
+            l_slope, l_r2, l_inv,
+            r_slope, r_r2, r_inv,
+            props.get('left_start', np.nan),
+            props.get('right_start', np.nan),
+            props.get('depletion_width', np.nan)
+        ]])
+        
+        np.savetxt(path, data, delimiter=',', header=header, comments='', fmt='%.6e')
+        QMessageBox.information(self, 'Saved', f'Properties saved to:\n{path}')
 
 
 class InteractiveProfile:

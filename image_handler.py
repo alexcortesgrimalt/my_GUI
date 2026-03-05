@@ -62,6 +62,18 @@ class SEMDataManager:
         # Normalizar voltaje
         voltage = (pixels / 65535) * scale + offset
 
+# 1. Extraer Metadata
+        xml_str = extract_xmp_metadata("../NW_2024-06-18_15-30-00_SEM_EBIC.tif")
+            
+           # --- AÑADE ESTO TEMPORALMENTE ---
+        print("\n--- INICIO DEL XML RAW ---")
+        print(xml_str)
+        print("--- FIN DEL XML RAW ---\n")
+            # --------------------------------
+
+   
+
+
         # Calcular corriente
         if inv:
             current = (((voltage - O) / C) + I) / G * -1e9
