@@ -949,6 +949,15 @@ class CorrelationGui(QMainWindow):
         if coords_px is None or len(coords_px) == 0:
             return
 
+        active_windows = []
+        for w in self.plot_windows:
+            try:
+                if w.isVisible():
+                    active_windows.append(w)
+            except RuntimeError:
+                pass 
+        self.plot_windows = active_windows
+
         xs = coords_px[:, 0]
         ys = coords_px[:, 1]
 
@@ -984,6 +993,8 @@ class CorrelationGui(QMainWindow):
         ax1.grid(True)
         fig.tight_layout()
         fig.show()
+
+        self.plot_windows.append(fig.canvas.manager.window)
 
     # --- PROFILES FUNCTIONALITY ---
     def generate_profiles_action(self):
@@ -1065,7 +1076,16 @@ class CorrelationGui(QMainWindow):
             QMessageBox.warning(self, "Error", "No profiles generated yet.")
             return
 
-        self.plot_windows = [w for w in self.plot_windows if w.isVisible()]
+        # Limpieza segura de ventanas fantasma
+        active_windows = []
+        for w in self.plot_windows:
+            try:
+                if w.isVisible():
+                    active_windows.append(w)
+            except RuntimeError:
+                # El objeto C++ fue destruido al cerrar la ventana, lo ignoramos
+                pass 
+        self.plot_windows = active_windows
 
         for prof in self.profile_manager.profiles:
             ui_elements = self.profile_checkboxes.get(prof.idx)
@@ -1256,7 +1276,17 @@ class CorrelationGui(QMainWindow):
             QMessageBox.warning(self, "Error", "No NWs detected yet. Click 'Detect NWs' first.")
             return
 
-        self.plot_windows = [w for w in self.plot_windows if w.isVisible()]
+        # Limpieza segura de ventanas fantasma
+        active_windows = []
+        for w in self.plot_windows:
+            try:
+                if w.isVisible():
+                    active_windows.append(w)
+            except RuntimeError:
+                # El objeto C++ fue destruido al cerrar la ventana, lo ignoramos
+                pass 
+        self.plot_windows = active_windows
+
         sem_data = self.data_manager.sem_data.astype(float)
         ebic_data = self.data_manager.current_map.astype(float)
 
@@ -1500,6 +1530,16 @@ class CorrelationGui(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to compute shift:\n{e}")
 
     def check_sweep(self):
+
+        active_windows = []
+        for w in self.plot_windows:
+            try:
+                if w.isVisible():
+                    active_windows.append(w)
+            except RuntimeError:
+                pass 
+        self.plot_windows = active_windows
+
         fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharex=True, sharey=True)
         
         base_img = self.data_manager.sem_data
@@ -1522,3 +1562,4 @@ class CorrelationGui(QMainWindow):
 
         fig.tight_layout()
         fig.show()
+        self.plot_windows.append(fig.canvas.manager.window)
