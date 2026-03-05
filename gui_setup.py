@@ -17,6 +17,7 @@ import scipy.ndimage as ndi
 from image_handler import SEMDataManager
 from junction_analyzer import JunctionAnalyzer
 from profile_manager import ProfileManager, ProfilePlotWindow
+from detect_NWs import NWDetector
 import matplotlib.pyplot as plt
 
 class CorrelationGui(QMainWindow):
@@ -68,6 +69,8 @@ class CorrelationGui(QMainWindow):
         self.current_line_artist = None 
         self.stored_lines = [] 
         self.junction_line_artist = None
+        self.nw_artists = []
+        self.detected_nws_data = [] # Para guardar las coordenadas físicas
         
         # Profile Data Memory
         self.plot_windows = []
@@ -93,6 +96,11 @@ class CorrelationGui(QMainWindow):
         c = px / self.pixel_size_phys
         r = (self.height_phys - py) / self.pixel_size_phys
         return c, r
+    
+    def px_to_phys(self, c, r):
+        px = c * self.pixel_size_phys
+        py = self.height_phys - (r * self.pixel_size_phys)
+        return px, py
 
     def setup_ui(self):
         # 1. Toolbar
@@ -430,11 +438,55 @@ class CorrelationGui(QMainWindow):
         
         sweep_layout.addStretch()
 
+        # TAB 5: NANO WIRES DETECTION
+        self.tab_nws = QWidget()
+        nws_layout = QVBoxLayout(self.tab_nws)
+        
+        lbl_nws_title = QLabel("Nanowires (NWs) Detection")
+        lbl_nws_title.setStyleSheet("font-weight: bold; font-size: 14px;")
+        nws_layout.addWidget(lbl_nws_title)
+        
+        lbl_nws_inst1 = QLabel("1. Draw a single line perpendicular to the NWs array (tool 📏).")
+        lbl_nws_inst1.setWordWrap(True)
+        nws_layout.addWidget(lbl_nws_inst1)
+        
+        nws_layout.addSpacing(10)
+        lbl_nws_prom = QLabel("Peak prominence threshold (0.01 - 1.0):")
+        self.spin_nw_prom = QDoubleSpinBox()
+        self.spin_nw_prom.setRange(0.01, 1.0)
+        self.spin_nw_prom.setSingleStep(0.05)
+        self.spin_nw_prom.setValue(0.20)
+        self.spin_nw_prom.setToolTip("Lower value detects more peaks, higher value ignores noise.")
+        nws_layout.addWidget(lbl_nws_prom)
+        nws_layout.addWidget(self.spin_nw_prom)
+
+        lbl_nws_len = QLabel("Length to extract (\u03BCm):")
+        self.spin_nw_len = QDoubleSpinBox()
+        self.spin_nw_len.setRange(0.1, 100.0)
+        self.spin_nw_len.setSingleStep(1.0)
+        self.spin_nw_len.setValue(5.0)
+        nws_layout.addWidget(lbl_nws_len)
+        nws_layout.addWidget(self.spin_nw_len)
+
+        self.btn_detect_nws = QPushButton("Detect NWs")
+        self.btn_detect_nws.setStyleSheet("QPushButton { font-weight: bold; background-color: #ffeeba; padding: 6px; }")
+        self.btn_detect_nws.clicked.connect(self.action_detect_nws)
+        nws_layout.addWidget(self.btn_detect_nws)
+        
+        nws_layout.addSpacing(15)
+        self.btn_extract_nws = QPushButton("Extract Current Profiles (1D)")
+        self.btn_extract_nws.setStyleSheet("QPushButton { font-weight: bold; background-color: #d1e7dd; padding: 6px; }")
+        self.btn_extract_nws.clicked.connect(self.action_extract_nws_profiles)
+        nws_layout.addWidget(self.btn_extract_nws)
+        
+        nws_layout.addStretch()
+
         # Add tabs
         self.tabs_right.addTab(self.tab_vis, "Vis")
         self.tabs_right.addTab(self.tab_junc, "Junction")
         self.tabs_right.addTab(self.tab_prof, "Profiles")
         self.tabs_right.addTab(self.tab_sweep, "Sweep")
+        self.tabs_right.addTab(self.tab_nws, "NWs")
         
         self.right_layout.addWidget(self.tabs_right)
         self.main_layout.addWidget(self.right_panel)
@@ -671,6 +723,15 @@ class CorrelationGui(QMainWindow):
                 widget = self.scroll_layout.itemAt(i).widget()
                 if widget: widget.deleteLater()
             self.profile_checkboxes = {}
+
+        # Añadir a reset_entire_state y action_home_reset
+        if hasattr(self, 'nw_artists'):
+            for artist in self.nw_artists:
+                try: artist.remove()
+                except: pass
+            self.nw_artists.clear()
+        if hasattr(self, 'detected_nws_data'):
+            self.detected_nws_data.clear()
         
         self.scale_bar_length_phys = None
         self.scale_bar_label = None
@@ -1051,6 +1112,15 @@ class CorrelationGui(QMainWindow):
             except: pass
             self.junction_line_artist = None
             
+        # Añadir a reset_entire_state y action_home_reset
+        if hasattr(self, 'nw_artists'):
+            for artist in self.nw_artists:
+                try: artist.remove()
+                except: pass
+            self.nw_artists.clear()
+        if hasattr(self, 'detected_nws_data'):
+            self.detected_nws_data.clear()
+
         self.profile_manager.clear() 
         for i in reversed(range(self.scroll_layout.count())):
             w = self.scroll_layout.itemAt(i).widget()
@@ -1090,6 +1160,112 @@ class CorrelationGui(QMainWindow):
             cmap_name = self.combo_cmap.currentText()
             self.layer_ebic.set_cmap(cmap_name)
             self.canvas.draw()
+
+    # ==========================================================
+    # --- NANOWIRES DETECTION LOGIC ---
+    # ==========================================================
+    def action_detect_nws(self):
+        if self.data_manager.current_map is None:
+            QMessageBox.warning(self, "Error", "An EBIC map is required for NW detection.")
+            return
+            
+        if len(self.stored_lines) != 1:
+            QMessageBox.warning(self, "Error", "Please draw exactly ONE baseline across the NWs.")
+            return
+
+        # Limpiar detecciones previas
+        for line in self.nw_artists:
+            try: line.remove()
+            except: pass
+        self.nw_artists.clear()
+        self.detected_nws_data.clear()
+
+        # Obtener coordenadas de la línea manual
+        line = self.stored_lines[0]
+        xdata, ydata = line.get_data()
+        c0, r0 = self.phys_to_px(xdata[0], ydata[0])
+        c1, r1 = self.phys_to_px(xdata[1], ydata[1])
+
+        pixel_size_m = self.data_manager.pixel_size if self.data_manager.pixel_size > 0 else 1e-6
+        length_px = (self.spin_nw_len.value() * 1e-6) / pixel_size_m
+        prominence = self.spin_nw_prom.value()
+
+        # Ejecutar el NUEVO detector con tracking iterativo
+        detector = NWDetector(pixel_size_m)
+        ebic_map = self.data_manager.current_map.astype(float)
+        
+        # Asignamos valores fijos al ancho de búsqueda y el paso por ahora
+        nw_lines_px, tracked_points_px = detector.detect_and_track(
+            ebic_map, 
+            (c0, r0), 
+            (c1, r1), 
+            length_px, 
+            rel_prominence=prominence,
+            search_width_px=15, 
+            step_px=2
+        )
+
+        if not nw_lines_px:
+            QMessageBox.information(self, "No NWs", "No Nanowires detected. Try lowering the peak prominence threshold.")
+            return
+
+        # Dibujar resultados y guardar físicas
+        for i, ((sc, sr), (ec, er)) in enumerate(nw_lines_px):
+            # Convertir extremos de la recta ajustada
+            sx, sy = self.px_to_phys(sc, sr)
+            ex, ey = self.px_to_phys(ec, er)
+            
+            # A. Dibujar los puntos reales rastreados (Tracking Crudo)
+            pts_c, pts_r = zip(*tracked_points_px[i]) # Desempaquetar
+            pts_x, pts_y = self.px_to_phys(np.array(pts_c), np.array(pts_r))
+            
+            track_dots = Line2D(pts_x, pts_y, color='red', marker='.', markersize=3, linewidth=0, alpha=0.5)
+            self.ax.add_line(track_dots)
+            self.nw_artists.append(track_dots)
+
+            # B. Dibujar la línea final ajustada por SVD (Cyan)
+            nw_line = Line2D([sx, ex], [sy, ey], color='cyan', linewidth=1.5, linestyle='--')
+            self.ax.add_line(nw_line)
+            self.nw_artists.append(nw_line)
+            
+            # Etiqueta de texto para cada NW
+            txt = self.ax.text(sx, sy, f"NW{i+1}", color='cyan', fontsize=9)
+            self.nw_artists.append(txt)
+            
+            self.detected_nws_data.append(((sx, sy), (ex, ey)))
+
+        self.canvas.draw()
+        self.status_bar.showMessage(f"Detected {len(nw_lines_px)} Nanowires.", 5000)
+
+    def action_extract_nws_profiles(self):
+        if not self.detected_nws_data:
+            QMessageBox.warning(self, "Error", "No NWs detected yet. Click 'Detect NWs' first.")
+            return
+
+        self.plot_windows = [w for w in self.plot_windows if w.isVisible()]
+        sem_data = self.data_manager.sem_data.astype(float)
+        ebic_data = self.data_manager.current_map.astype(float)
+
+        # Usar la misma lógica de visualización 1D para cada nanohilo
+        for idx, ((sx, sy), (ex, ey)) in enumerate(self.detected_nws_data):
+            c1, r1 = self.phys_to_px(sx, sy)
+            c2, r2 = self.phys_to_px(ex, ey)
+            
+            N = int(np.ceil(np.hypot(c2 - c1, r2 - r1)))
+            if N < 2: N = 2
+            
+            c_vals = np.linspace(c1, c2, N)
+            r_vals = np.linspace(r1, r2, N)
+            
+            sem_prof = ndi.map_coordinates(sem_data, [r_vals, c_vals], order=1, mode='nearest')
+            ebic_prof = ndi.map_coordinates(ebic_data, [r_vals, c_vals], order=1, mode='nearest')
+            
+            dist_um = np.linspace(0, np.hypot(ex - sx, ey - sy), N)
+            
+            # Abre una ventana de perfil para el NW (Reutilizando tu ProfilePlotWindow)
+            win = ProfilePlotWindow(f"NW_{idx+1}", dist_um, sem_prof, ebic_prof, ['sem', 'abs_i'], self.unit_label)
+            win.show()
+            self.plot_windows.append(win)
 
     # --- MOUSE EVENTS ---
     def on_mouse_press(self, event):
