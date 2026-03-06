@@ -90,6 +90,15 @@ class NWDetector:
             else:
                 dir_c, dir_r = n_c, n_r 
             
+            # --- NUEVO: Forzar dirección de Izquierda a Derecha ---
+            # Si el vector apunta hacia la izquierda (dir_c negativo), lo invertimos.
+            # Si es exactamente vertical (dir_c == 0), forzamos que apunte hacia arriba o abajo según prefieras (aquí hacia arriba).
+            if dir_c < 0:
+                dir_c = -dir_c
+                dir_r = -dir_r
+            elif dir_c == 0 and dir_r < 0:
+                dir_r = -dir_r
+            
             start_c = X_mean - dir_c * half_l
             start_r = Y_mean - dir_r * half_l
             end_c = X_mean + dir_c * half_l
@@ -98,4 +107,11 @@ class NWDetector:
             nw_lines.append(((start_c, start_r), (end_c, end_r)))
             all_tracked_points.append(tracked_points)
 
-        return nw_lines, all_tracked_points
+        # Empaquetar variables en juego para el mapa final
+        run_parameters = {
+            'p0_px': p0_px, 'p1_px': p1_px, 'length_px': length_px,
+            'rel_prominence': rel_prominence, 'search_width_px': search_width_px,
+            'step_px': step_px, 'expected_nw_count': expected_nw_count
+        }
+
+        return nw_lines, all_tracked_points, run_parameters

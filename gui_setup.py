@@ -1229,7 +1229,8 @@ class CorrelationGui(QMainWindow):
         ebic_map = self.data_manager.current_map.astype(float)
         
         # Ejecutar con todos los parámetros
-        nw_lines_px, tracked_points_px = detector.detect_and_track(
+        # Ejecutar con todos los parámetros (Añadimos run_parameters)
+        nw_lines_px, tracked_points_px, run_parameters = detector.detect_and_track(
             ebic_map, 
             (c0, r0), 
             (c1, r1), 
@@ -1251,15 +1252,28 @@ class CorrelationGui(QMainWindow):
             pts_c, pts_r = zip(*tracked_points_px[i]) 
             pts_x, pts_y = self.px_to_phys(np.array(pts_c), np.array(pts_r))
             
+            # 1. Puntos rastreados (caminata)
             track_dots = Line2D(pts_x, pts_y, color='red', marker='.', markersize=3, linewidth=0, alpha=0.5)
             self.ax.add_line(track_dots)
             self.nw_artists.append(track_dots)
 
-            nw_line = Line2D([sx, ex], [sy, ey], color='cyan', linewidth=1.5, linestyle='--')
-            self.ax.add_line(nw_line)
-            self.nw_artists.append(nw_line)
+            # 2. Dibujar flecha indicando la dirección del perfil (de sx,sy a ex,ey)
+            arrow = self.ax.annotate(
+                '', 
+                xy=(ex, ey),       # Punta de la flecha
+                xytext=(sx, sy),   # Base de la flecha
+                arrowprops=dict(
+                    arrowstyle="->", 
+                    color="cyan", 
+                    lw=2, 
+                    mutation_scale=15
+                )
+            )
+            self.nw_artists.append(arrow)
             
-            txt = self.ax.text(sx, sy, f"NW{i+1}", color='cyan', fontsize=9)
+            # 3. Etiqueta numérica en el origen de la flecha
+            txt = self.ax.text(sx, sy, f" NW{i+1}", color='white', 
+                               fontsize=10, fontweight='bold', ha='right', va='bottom')
             self.nw_artists.append(txt)
             
             self.detected_nws_data.append(((sx, sy), (ex, ey)))
