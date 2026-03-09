@@ -65,6 +65,7 @@ class CorrelationGui(QMainWindow):
 
         # Interactive variables
         self.pan_start = None 
+        self.mmb_pan_start = None
         self.line_start_point = None
         self.current_line_artist = None 
         self.stored_lines = [] 
@@ -113,19 +114,24 @@ class CorrelationGui(QMainWindow):
         return px, py
 
     # ==========================================================
-    # --- MOUSE EVENTS & INTERACTIVITY (Refactored) ---
+    # --- MOUSE EVENTS & INTERACTIVITY ---
     # ==========================================================
     def on_mouse_press(self, event):
         if event.inaxes != self.ax: return
         
+        # --- NUEVO: PANNING CON BOTÓN CENTRAL ---
+        if event.button == 2: # 2 es el click central / rueda
+            self.mmb_pan_start = (event.xdata, event.ydata)
+            self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
+
         if self.mode == 'view':
             # 1. Comprobar si tocamos líneas de perfil manuales (ProfileManager)
             if self.profile_manager.on_press(event): return 
 
-            # 2. OPTIMIZACIÓN: Detectar agarre de puntas de NW (Blitting Setup)
+            # 2. Detectar agarre de puntas de NW (Blitting Setup)
             if event.xdata and event.ydata and self.detected_nws_data:
                 xlim = self.ax.get_xlim()
-                # Tolerancia de agarre dinámica (1.5% del fov visible)
                 tol = (xlim[1] - xlim[0]) * 0.015 
                 
                 for i, ((sx, sy), (ex, ey)) in enumerate(self.detected_nws_data):
@@ -137,18 +143,14 @@ class CorrelationGui(QMainWindow):
                         self.dragging_nw_end = 'start' if is_start else 'end'
                         self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
                         
-                        # --- SETUP BLITTING ---
-                        # Ocultar artistas temporales que se van a mover para capturar fondo limpio
                         selected_arrow = self.nw_arrows[i]
                         selected_text = self.nw_texts[i]
                         selected_arrow.set_visible(False)
                         selected_text.set_visible(False)
-                        self.canvas.draw() # Forzar dibujado sin ellos
+                        self.canvas.draw() 
                         
-                        # Guardar caché del fondo estático (mapa EBIC, grid, etc.)
                         self.blit_bg_cache = self.canvas.copy_from_bbox(self.ax.bbox)
                         
-                        # Restaurar visibilidad para dibujarlos manualmente en el move
                         selected_arrow.set_visible(True)
                         selected_text.set_visible(True)
                         return
@@ -158,7 +160,6 @@ class CorrelationGui(QMainWindow):
                 self.pan_start = (event.xdata, event.ydata)
                 self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
             elif self.mode == 'line':
-                # Borrar líneas previas si dibujamos una nueva
                 if len(self.stored_lines) >= 1:
                     for l in self.stored_lines: l.remove()
                     self.stored_lines.clear()
@@ -186,15 +187,34 @@ class CorrelationGui(QMainWindow):
                 return
         except: pass
 
+        # --- NUEVO: LÓGICA DE MOVIMIENTO CON BOTÓN CENTRAL ---
+        if getattr(self, 'mmb_pan_start', None):
+            if not event.xdata or not event.ydata: return
+            dx = event.xdata - self.mmb_pan_start[0]
+            dy = event.ydata - self.mmb_pan_start[1]
+            
+            new_xlim = [self.ax.get_xlim()[0] - dx, self.ax.get_xlim()[1] - dx]
+            new_ylim = [self.ax.get_ylim()[0] - dy, self.ax.get_ylim()[1] - dy]
+
+            if new_xlim[0] < 0: new_xlim = [0, new_xlim[1] - new_xlim[0]]
+            elif new_xlim[1] > self.width_phys: new_xlim = [self.width_phys - (new_xlim[1] - new_xlim[0]), self.width_phys]
+                
+            if new_ylim[0] < 0: new_ylim = [0, new_ylim[1] - new_ylim[0]]
+            elif new_ylim[1] > self.height_phys: new_ylim = [self.height_phys - (new_ylim[1] - new_ylim[0]), self.height_phys]
+
+            self.ax.set_xlim(new_xlim)
+            self.ax.set_ylim(new_ylim)
+            self.draw_scale_bar()
+            self.canvas.draw_idle()
+            return # Bloquea el resto de acciones mientras haces pan con el botón central
+
         if self.mode == 'view':
-            # --- MEJORA: Arrastre ULTRA-RÁPIDO con Colisiones en Bordes ---
             if self.dragging_nw_idx is not None and self.blit_bg_cache is not None:
                 if not event.xdata or not event.ydata: return
                 
                 i = self.dragging_nw_idx
                 (sx, sy), (ex, ey) = self.detected_nws_data[i]
                 
-                # Identificar ancla (punto fijo) y móvil
                 if self.dragging_nw_end == 'start':
                     fix_x, fix_y = ex, ey
                     move_x, move_y = sx, sy
@@ -202,82 +222,58 @@ class CorrelationGui(QMainWindow):
                     fix_x, fix_y = sx, sy
                     move_x, move_y = ex, ey
                     
-                # Vector dirección original (unir fix -> move)
                 vx, vy = move_x - fix_x, move_y - fix_y
                 L_orig = np.hypot(vx, vy)
-                if L_orig == 0: return # Safety
+                if L_orig == 0: return 
                 ux, uy = vx / L_orig, vy / L_orig
                 
-                # Proyección del ratón sobre la recta original (garantiza colinealidad)
                 wx, wy = event.xdata - fix_x, event.ydata - fix_y
                 proj_len = wx * ux + wy * uy
                 
-                # --- MEJORA FÍSICA: Clipping en Bordes de Imagen ---
-                # Definir límites físicos (0 a Max)
                 W_phys = self.width_phys
                 H_phys = self.height_phys
-                
-                # Longitud mínima de seguridad (1 Px físico aprox)
                 min_len = self.pixel_size_phys
                 
-                # Calcular intersecciones del rayo (fix + t*U) con los 4 bordes físicos [x=0, x=W, y=0, y=H]
                 t_candidates = []
-                
-                # Intersección con X=0 y X=W_phys
-                if abs(ux) > 1e-12: # Si no es vertical
+                if abs(ux) > 1e-12: 
                     t0x = (0 - fix_x) / ux
                     twx = (W_phys - fix_x) / ux
                     if t0x > min_len: t_candidates.append(t0x)
                     if twx > min_len: t_candidates.append(twx)
                     
-                # Intersección con Y=0 y Y=H_phys
-                if abs(uy) > 1e-12: # Si no es horizontal
+                if abs(uy) > 1e-12: 
                     t0y = (0 - fix_y) / uy
                     thy = (H_phys - fix_y) / uy
                     if t0y > min_len: t_candidates.append(t0y)
                     if thy > min_len: t_candidates.append(thy)
                 
-                # Determinar la longitud máxima permitida (la primera colisión con borde)
                 if t_candidates:
                     max_allowed_len = min(t_candidates)
                 else:
-                    max_allowed_len = proj_len # No debería pasar, pero por si acaso
+                    max_allowed_len = proj_len 
 
-                # Aplicar límites (entre min y colisión)
                 proj_len = max(min_len, min(proj_len, max_allowed_len))
                     
-                # Calcular nueva posición 2D clipped
                 new_x = fix_x + proj_len * ux
                 new_y = fix_y + proj_len * uy
                 
-                # Actualizar base de datos física
                 if self.dragging_nw_end == 'start':
                     sx, sy = new_x, new_y
                 else:
                     ex, ey = new_x, new_y
                 self.detected_nws_data[i] = ((sx, sy), (ex, ey))
                 
-                # --- UPDATE VISUAL (BLITTING) ---
-                # 1. Restaurar fondo estático rápido
                 self.canvas.restore_region(self.blit_bg_cache)
-                
-                # 2. Actualizar geometrías de los artistas Matplotlib
-                self.nw_arrows[i].xy = (ex, ey)          # Punta
-                self.nw_arrows[i].set_position((sx, sy)) # Base (xytext)
-                self.nw_texts[i].set_position((sx, sy))  # Etiqueta
-                
-                # 3. Re-dibujar SOLO los artistas móviles sobre el fondo restaurado
+                self.nw_arrows[i].xy = (ex, ey)          
+                self.nw_arrows[i].set_position((sx, sy)) 
+                self.nw_texts[i].set_position((sx, sy))  
                 self.ax.draw_artist(self.nw_arrows[i])
                 self.ax.draw_artist(self.nw_texts[i])
-                
-                # 4. Actualizar la región de la pantalla (blit)
                 self.canvas.blit(self.ax.bbox)
                 return
             
-            # Dragging de ProfileManager
             if self.profile_manager.on_drag(event): return
 
-        # Modos Pan/Line standard
         try:
             if self.mode == 'pan' and self.pan_start:
                 dx = event.xdata - self.pan_start[0]
@@ -286,7 +282,6 @@ class CorrelationGui(QMainWindow):
                 new_xlim = [self.ax.get_xlim()[0] - dx, self.ax.get_xlim()[1] - dx]
                 new_ylim = [self.ax.get_ylim()[0] - dy, self.ax.get_ylim()[1] - dy]
 
-                # Bounding box Pan safety
                 if new_xlim[0] < 0: new_xlim = [0, new_xlim[1] - new_xlim[0]]
                 elif new_xlim[1] > self.width_phys: new_xlim = [self.width_phys - (new_xlim[1] - new_xlim[0]), self.width_phys]
                     
@@ -305,20 +300,26 @@ class CorrelationGui(QMainWindow):
         except: pass
 
     def on_mouse_release(self, event):
+        # --- NUEVO: LIBERAR BOTÓN CENTRAL ---
+        if event.button == 2:
+            self.mmb_pan_start = None
+            # Restaurar el cursor correcto según la herramienta actual
+            if self.mode == 'pan': self.canvas.setCursor(Qt.CursorShape.OpenHandCursor)
+            elif self.mode == 'line': self.canvas.setCursor(Qt.CursorShape.CrossCursor)
+            else: self.canvas.setCursor(Qt.CursorShape.ArrowCursor)
+            return
+
         if self.mode == 'view':
-            # Finalizar arrastre de NW (Blitting Cleanup)
-            if self.dragging_nw_idx is not None:
+            if getattr(self, 'dragging_nw_idx', None) is not None:
                 self.dragging_nw_idx = None
                 self.dragging_nw_end = None
                 self.blit_bg_cache = None
                 self.canvas.setCursor(Qt.CursorShape.ArrowCursor)
-                # Dibujado final standard para asegurar sincronización
                 self.canvas.draw_idle() 
                 return
                 
             if self.profile_manager.on_release(event): return
 
-        # Finalizar Line/Pan standard
         try:
             if self.mode == 'pan':
                 self.pan_start = None
@@ -944,6 +945,7 @@ class CorrelationGui(QMainWindow):
     def reset_entire_state(self):
         self.layer_sem = None
         self.layer_ebic = None
+        self.mmb_pan_start = None
         if self.cbar:
             try: self.cbar.remove()
             except: pass
