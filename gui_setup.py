@@ -69,8 +69,17 @@ class CorrelationGui(QMainWindow):
         self.current_line_artist = None 
         self.stored_lines = [] 
         self.junction_line_artist = None
+        
+        # NWs Data Structures
         self.nw_artists = []
-        self.detected_nws_data = [] # Para guardar las coordenadas físicas
+        self.nw_arrows = []   
+        self.nw_texts = []    
+        self.detected_nws_data = [] # Stores: [((sx, sy), (ex, ey)), ...] physically
+
+        # --- OPTIMIZACIÓN: Variables de Blitting (Super smooth drag) ---
+        self.dragging_nw_idx = None
+        self.dragging_nw_end = None # 'start' o 'end'
+        self.blit_bg_cache = None   # Caché del fondo estático
         
         # Profile Data Memory
         self.plot_windows = []
@@ -92,6 +101,7 @@ class CorrelationGui(QMainWindow):
         # --- START: INSTRUCTION SCREEN ---
         self.show_placeholder()
 
+    # --- COORDINATE CONVERSION (Vectorized for safety) ---
     def phys_to_px(self, px, py):
         c = px / self.pixel_size_phys
         r = (self.height_phys - py) / self.pixel_size_phys
@@ -102,6 +112,227 @@ class CorrelationGui(QMainWindow):
         py = self.height_phys - (r * self.pixel_size_phys)
         return px, py
 
+    # ==========================================================
+    # --- MOUSE EVENTS & INTERACTIVITY (Refactored) ---
+    # ==========================================================
+    def on_mouse_press(self, event):
+        if event.inaxes != self.ax: return
+        
+        if self.mode == 'view':
+            # 1. Comprobar si tocamos líneas de perfil manuales (ProfileManager)
+            if self.profile_manager.on_press(event): return 
+
+            # 2. OPTIMIZACIÓN: Detectar agarre de puntas de NW (Blitting Setup)
+            if event.xdata and event.ydata and self.detected_nws_data:
+                xlim = self.ax.get_xlim()
+                # Tolerancia de agarre dinámica (1.5% del fov visible)
+                tol = (xlim[1] - xlim[0]) * 0.015 
+                
+                for i, ((sx, sy), (ex, ey)) in enumerate(self.detected_nws_data):
+                    is_start = np.hypot(event.xdata - sx, event.ydata - sy) < tol
+                    is_end = np.hypot(event.xdata - ex, event.ydata - ey) < tol
+                    
+                    if is_start or is_end:
+                        self.dragging_nw_idx = i
+                        self.dragging_nw_end = 'start' if is_start else 'end'
+                        self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
+                        
+                        # --- SETUP BLITTING ---
+                        # Ocultar artistas temporales que se van a mover para capturar fondo limpio
+                        selected_arrow = self.nw_arrows[i]
+                        selected_text = self.nw_texts[i]
+                        selected_arrow.set_visible(False)
+                        selected_text.set_visible(False)
+                        self.canvas.draw() # Forzar dibujado sin ellos
+                        
+                        # Guardar caché del fondo estático (mapa EBIC, grid, etc.)
+                        self.blit_bg_cache = self.canvas.copy_from_bbox(self.ax.bbox)
+                        
+                        # Restaurar visibilidad para dibujarlos manualmente en el move
+                        selected_arrow.set_visible(True)
+                        selected_text.set_visible(True)
+                        return
+                        
+        try:
+            if self.mode == 'pan':
+                self.pan_start = (event.xdata, event.ydata)
+                self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
+            elif self.mode == 'line':
+                # Borrar líneas previas si dibujamos una nueva
+                if len(self.stored_lines) >= 1:
+                    for l in self.stored_lines: l.remove()
+                    self.stored_lines.clear()
+                    self.profile_manager.clear()
+                    
+                self.line_start_point = (event.xdata, event.ydata)
+                self.current_line_artist = Line2D([event.xdata, event.xdata], 
+                                                  [event.ydata, event.ydata], 
+                                                  color='red', linewidth=2)
+                self.ax.add_line(self.current_line_artist)
+                self.canvas.draw()
+        except: pass
+
+    def on_mouse_move(self, event):
+        # Actualizar coordenadas en status bar (siempre)
+        try:
+            if event.inaxes:
+                c, r = self.phys_to_px(event.xdata, event.ydata)
+                px_x, px_y = int(c), int(r)
+                px_x = max(0, min(px_x, self.img_width - 1))
+                px_y = max(0, min(px_y, self.img_height - 1))
+                self.lbl_coords.setText(f"Coordinates (Px): X {px_x}, Y {px_y}")
+            else:
+                self.lbl_coords.setText("Coordinates (Px): - , -")
+                return
+        except: pass
+
+        if self.mode == 'view':
+            # --- MEJORA: Arrastre ULTRA-RÁPIDO con Colisiones en Bordes ---
+            if self.dragging_nw_idx is not None and self.blit_bg_cache is not None:
+                if not event.xdata or not event.ydata: return
+                
+                i = self.dragging_nw_idx
+                (sx, sy), (ex, ey) = self.detected_nws_data[i]
+                
+                # Identificar ancla (punto fijo) y móvil
+                if self.dragging_nw_end == 'start':
+                    fix_x, fix_y = ex, ey
+                    move_x, move_y = sx, sy
+                else:
+                    fix_x, fix_y = sx, sy
+                    move_x, move_y = ex, ey
+                    
+                # Vector dirección original (unir fix -> move)
+                vx, vy = move_x - fix_x, move_y - fix_y
+                L_orig = np.hypot(vx, vy)
+                if L_orig == 0: return # Safety
+                ux, uy = vx / L_orig, vy / L_orig
+                
+                # Proyección del ratón sobre la recta original (garantiza colinealidad)
+                wx, wy = event.xdata - fix_x, event.ydata - fix_y
+                proj_len = wx * ux + wy * uy
+                
+                # --- MEJORA FÍSICA: Clipping en Bordes de Imagen ---
+                # Definir límites físicos (0 a Max)
+                W_phys = self.width_phys
+                H_phys = self.height_phys
+                
+                # Longitud mínima de seguridad (1 Px físico aprox)
+                min_len = self.pixel_size_phys
+                
+                # Calcular intersecciones del rayo (fix + t*U) con los 4 bordes físicos [x=0, x=W, y=0, y=H]
+                t_candidates = []
+                
+                # Intersección con X=0 y X=W_phys
+                if abs(ux) > 1e-12: # Si no es vertical
+                    t0x = (0 - fix_x) / ux
+                    twx = (W_phys - fix_x) / ux
+                    if t0x > min_len: t_candidates.append(t0x)
+                    if twx > min_len: t_candidates.append(twx)
+                    
+                # Intersección con Y=0 y Y=H_phys
+                if abs(uy) > 1e-12: # Si no es horizontal
+                    t0y = (0 - fix_y) / uy
+                    thy = (H_phys - fix_y) / uy
+                    if t0y > min_len: t_candidates.append(t0y)
+                    if thy > min_len: t_candidates.append(thy)
+                
+                # Determinar la longitud máxima permitida (la primera colisión con borde)
+                if t_candidates:
+                    max_allowed_len = min(t_candidates)
+                else:
+                    max_allowed_len = proj_len # No debería pasar, pero por si acaso
+
+                # Aplicar límites (entre min y colisión)
+                proj_len = max(min_len, min(proj_len, max_allowed_len))
+                    
+                # Calcular nueva posición 2D clipped
+                new_x = fix_x + proj_len * ux
+                new_y = fix_y + proj_len * uy
+                
+                # Actualizar base de datos física
+                if self.dragging_nw_end == 'start':
+                    sx, sy = new_x, new_y
+                else:
+                    ex, ey = new_x, new_y
+                self.detected_nws_data[i] = ((sx, sy), (ex, ey))
+                
+                # --- UPDATE VISUAL (BLITTING) ---
+                # 1. Restaurar fondo estático rápido
+                self.canvas.restore_region(self.blit_bg_cache)
+                
+                # 2. Actualizar geometrías de los artistas Matplotlib
+                self.nw_arrows[i].xy = (ex, ey)          # Punta
+                self.nw_arrows[i].set_position((sx, sy)) # Base (xytext)
+                self.nw_texts[i].set_position((sx, sy))  # Etiqueta
+                
+                # 3. Re-dibujar SOLO los artistas móviles sobre el fondo restaurado
+                self.ax.draw_artist(self.nw_arrows[i])
+                self.ax.draw_artist(self.nw_texts[i])
+                
+                # 4. Actualizar la región de la pantalla (blit)
+                self.canvas.blit(self.ax.bbox)
+                return
+            
+            # Dragging de ProfileManager
+            if self.profile_manager.on_drag(event): return
+
+        # Modos Pan/Line standard
+        try:
+            if self.mode == 'pan' and self.pan_start:
+                dx = event.xdata - self.pan_start[0]
+                dy = event.ydata - self.pan_start[1]
+                
+                new_xlim = [self.ax.get_xlim()[0] - dx, self.ax.get_xlim()[1] - dx]
+                new_ylim = [self.ax.get_ylim()[0] - dy, self.ax.get_ylim()[1] - dy]
+
+                # Bounding box Pan safety
+                if new_xlim[0] < 0: new_xlim = [0, new_xlim[1] - new_xlim[0]]
+                elif new_xlim[1] > self.width_phys: new_xlim = [self.width_phys - (new_xlim[1] - new_xlim[0]), self.width_phys]
+                    
+                if new_ylim[0] < 0: new_ylim = [0, new_ylim[1] - new_ylim[0]]
+                elif new_ylim[1] > self.height_phys: new_ylim = [self.height_phys - (new_ylim[1] - new_ylim[0]), self.height_phys]
+
+                self.ax.set_xlim(new_xlim)
+                self.ax.set_ylim(new_ylim)
+                self.draw_scale_bar()
+                self.canvas.draw_idle()
+                
+            elif self.mode == 'line' and self.line_start_point and self.current_line_artist:
+                self.current_line_artist.set_data([self.line_start_point[0], event.xdata], 
+                                                  [self.line_start_point[1], event.ydata])
+                self.canvas.draw_idle()
+        except: pass
+
+    def on_mouse_release(self, event):
+        if self.mode == 'view':
+            # Finalizar arrastre de NW (Blitting Cleanup)
+            if self.dragging_nw_idx is not None:
+                self.dragging_nw_idx = None
+                self.dragging_nw_end = None
+                self.blit_bg_cache = None
+                self.canvas.setCursor(Qt.CursorShape.ArrowCursor)
+                # Dibujado final standard para asegurar sincronización
+                self.canvas.draw_idle() 
+                return
+                
+            if self.profile_manager.on_release(event): return
+
+        # Finalizar Line/Pan standard
+        try:
+            if self.mode == 'pan':
+                self.pan_start = None
+                self.canvas.setCursor(Qt.CursorShape.OpenHandCursor)
+            elif self.mode == 'line':
+                if self.current_line_artist:
+                    self.stored_lines.append(self.current_line_artist)
+                    self.current_line_artist = None
+                    self.line_start_point = None
+        except: pass
+
+    # ==========================================================
+    # --- GUI SETUP & VISUALS (Rest of the class) ---
+    # ==========================================================
     def setup_ui(self):
         # 1. Toolbar
         toolbar = QToolBar("Main Toolbar")
@@ -411,13 +642,11 @@ class CorrelationGui(QMainWindow):
         self.lbl_sweep_status.setStyleSheet("color: #555;")
         sweep_layout.addWidget(self.lbl_sweep_status)
         
-        # --- NUEVO: PREVISUALIZACIÓN DE IMAGEN ---
         self.lbl_sweep_preview = QLabel("No image preview")
         self.lbl_sweep_preview.setFixedSize(260, 200)
         self.lbl_sweep_preview.setStyleSheet("background-color: #dcdcdc; border: 1px solid #aaa;")
         self.lbl_sweep_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sweep_layout.addWidget(self.lbl_sweep_preview)
-        # -----------------------------------------
 
         sweep_layout.addSpacing(15)
 
@@ -438,7 +667,7 @@ class CorrelationGui(QMainWindow):
         
         sweep_layout.addStretch()
 
-       # TAB 5: NANO WIRES DETECTION
+        # TAB 5: NANO WIRES DETECTION
         self.tab_nws = QWidget()
         nws_layout = QVBoxLayout(self.tab_nws)
         
@@ -446,12 +675,11 @@ class CorrelationGui(QMainWindow):
         lbl_nws_title.setStyleSheet("font-weight: bold; font-size: 14px;")
         nws_layout.addWidget(lbl_nws_title)
         
-        lbl_nws_inst1 = QLabel("1. Draw a baseline across the NWs array (tool 📏).")
+        lbl_nws_inst1 = QLabel("1. Draw a baseline (📏).\n2. Drag cyan arrow ends to modify length.")
         lbl_nws_inst1.setWordWrap(True)
         nws_layout.addWidget(lbl_nws_inst1)
         nws_layout.addSpacing(10)
         
-        # --- NUEVOS CONTROLES PARA MOSTRAR TODOS LOS PARÁMETROS ---
         lbl_nws_expected = QLabel("Expected NWs (0 = Auto-detect all):")
         self.spin_nw_expected = QSpinBox()
         self.spin_nw_expected.setRange(0, 100)
@@ -467,7 +695,7 @@ class CorrelationGui(QMainWindow):
         nws_layout.addWidget(lbl_nws_prom)
         nws_layout.addWidget(self.spin_nw_prom)
 
-        lbl_nws_len = QLabel("Length to extract (\u03BCm):")
+        lbl_nws_len = QLabel("Initial Length (\u03BCm):")
         self.spin_nw_len = QDoubleSpinBox()
         self.spin_nw_len.setRange(0.1, 100.0)
         self.spin_nw_len.setSingleStep(1.0)
@@ -737,14 +965,20 @@ class CorrelationGui(QMainWindow):
                 if widget: widget.deleteLater()
             self.profile_checkboxes = {}
 
-        # Añadir a reset_entire_state y action_home_reset
+        # Limpiar NWs
         if hasattr(self, 'nw_artists'):
             for artist in self.nw_artists:
                 try: artist.remove()
                 except: pass
             self.nw_artists.clear()
-        if hasattr(self, 'detected_nws_data'):
-            self.detected_nws_data.clear()
+        if hasattr(self, 'nw_arrows'): self.nw_arrows.clear()
+        if hasattr(self, 'nw_texts'): self.nw_texts.clear()
+        if hasattr(self, 'detected_nws_data'): self.detected_nws_data.clear()
+        
+        # Limpiar variables de arrastre
+        self.dragging_nw_idx = None
+        self.dragging_nw_end = None
+        self.blit_bg_cache = None
         
         self.scale_bar_length_phys = None
         self.scale_bar_label = None
@@ -783,7 +1017,6 @@ class CorrelationGui(QMainWindow):
         self.lbl_sweep_status.setText("Status: No sweep image loaded")
         self.btn_check_sweep.setEnabled(False)
 
-        # --- NUEVO: LIMPIAR PREVISUALIZACIÓN ---
         self.lbl_sweep_preview.clear()
         self.lbl_sweep_preview.setText("No image preview")
 
@@ -1083,7 +1316,6 @@ class CorrelationGui(QMainWindow):
                 if w.isVisible():
                     active_windows.append(w)
             except RuntimeError:
-                # El objeto C++ fue destruido al cerrar la ventana, lo ignoramos
                 pass 
         self.plot_windows = active_windows
 
@@ -1145,14 +1377,14 @@ class CorrelationGui(QMainWindow):
             except: pass
             self.junction_line_artist = None
             
-        # Añadir a reset_entire_state y action_home_reset
         if hasattr(self, 'nw_artists'):
             for artist in self.nw_artists:
                 try: artist.remove()
                 except: pass
             self.nw_artists.clear()
-        if hasattr(self, 'detected_nws_data'):
-            self.detected_nws_data.clear()
+        if hasattr(self, 'nw_arrows'): self.nw_arrows.clear()
+        if hasattr(self, 'nw_texts'): self.nw_texts.clear()
+        if hasattr(self, 'detected_nws_data'): self.detected_nws_data.clear()
 
         self.profile_manager.clear() 
         for i in reversed(range(self.scroll_layout.count())):
@@ -1165,12 +1397,12 @@ class CorrelationGui(QMainWindow):
 
         self.set_mode("view")
         self.draw_scale_bar()
-        self.canvas.draw()
+        self.canvas.draw_idle()
 
     def toggle_grid(self):
         if self.width_phys > 0:
             self.ax.grid(self.btn_grid.isChecked())
-            self.canvas.draw()
+            self.canvas.draw_idle()
 
     def toggle_overlay(self):
         self.show_overlay = self.btn_overlay.isChecked()
@@ -1181,7 +1413,7 @@ class CorrelationGui(QMainWindow):
             
             base_title = "SEM View (Frame 0)" if self.current_frame_idx == 0 else "Raw EBIC View (Frame 1)"
             self.ax.set_title(base_title + (" + EBIC Overlay" if self.show_overlay else ""))
-            self.canvas.draw()
+            self.canvas.draw_idle()
 
     def update_layer_props(self, _=None):
         val = self.slider_opacity.value()
@@ -1192,7 +1424,7 @@ class CorrelationGui(QMainWindow):
             self.layer_ebic.set_alpha(self.opacity)
             cmap_name = self.combo_cmap.currentText()
             self.layer_ebic.set_cmap(cmap_name)
-            self.canvas.draw()
+            self.canvas.draw_idle()
 
     # ==========================================================
     # --- NANOWIRES DETECTION LOGIC ---
@@ -1210,6 +1442,8 @@ class CorrelationGui(QMainWindow):
             try: line.remove()
             except: pass
         self.nw_artists.clear()
+        self.nw_arrows.clear()
+        self.nw_texts.clear()
         self.detected_nws_data.clear()
 
         line = self.stored_lines[0]
@@ -1219,7 +1453,6 @@ class CorrelationGui(QMainWindow):
 
         pixel_size_m = self.data_manager.pixel_size if self.data_manager.pixel_size > 0 else 1e-6
         
-        # Recoger todos los parámetros visibles en la UI
         length_px = (self.spin_nw_len.value() * 1e-6) / pixel_size_m
         prominence = self.spin_nw_prom.value()
         expected_nws = self.spin_nw_expected.value()
@@ -1228,8 +1461,7 @@ class CorrelationGui(QMainWindow):
         detector = NWDetector(pixel_size_m)
         ebic_map = self.data_manager.current_map.astype(float)
         
-        # Ejecutar con todos los parámetros
-        # Ejecutar con todos los parámetros (Añadimos run_parameters)
+        # Ejecutar detección original
         nw_lines_px, tracked_points_px, run_parameters = detector.detect_and_track(
             ebic_map, 
             (c0, r0), 
@@ -1257,11 +1489,13 @@ class CorrelationGui(QMainWindow):
             self.ax.add_line(track_dots)
             self.nw_artists.append(track_dots)
 
-            # 2. Dibujar flecha indicando la dirección del perfil (de sx,sy a ex,ey)
+            # 2. Dibujar flecha indicando la dirección del perfil
             arrow = self.ax.annotate(
                 '', 
                 xy=(ex, ey),       # Punta de la flecha
                 xytext=(sx, sy),   # Base de la flecha
+                # --- MEJORA: Evitar que desaparezca al hacer zoom ---
+                annotation_clip=False, 
                 arrowprops=dict(
                     arrowstyle="->", 
                     color="cyan", 
@@ -1270,20 +1504,24 @@ class CorrelationGui(QMainWindow):
                 )
             )
             self.nw_artists.append(arrow)
+            self.nw_arrows.append(arrow) # Guardamos referencia para moverla
             
             # 3. Etiqueta numérica en el origen de la flecha
             txt = self.ax.text(sx, sy, f" NW{i+1}", color='white', 
-                               fontsize=10, fontweight='bold', ha='right', va='bottom')
+                               fontsize=10, fontweight='bold', ha='right', va='bottom',
+                               # --- MEJORA: Evitar recorte agresivo ---
+                               clip_on=False) 
             self.nw_artists.append(txt)
+            self.nw_texts.append(txt) # Guardamos referencia
             
             self.detected_nws_data.append(((sx, sy), (ex, ey)))
 
-        self.canvas.draw()
+        self.canvas.draw_idle()
         
         if expected_nws > 0 and len(nw_lines_px) < expected_nws:
             self.status_bar.showMessage(f"Warning: Only found {len(nw_lines_px)} NWs, but {expected_nws} were expected.", 7000)
         else:
-            self.status_bar.showMessage(f"Detected {len(nw_lines_px)} Nanowires.", 5000)
+            self.status_bar.showMessage(f"Detected {len(nw_lines_px)} Nanowires. Drag cyan arrow ends to modify length.", 5000)
 
     def action_extract_nws_profiles(self):
         if not self.detected_nws_data:
@@ -1297,14 +1535,12 @@ class CorrelationGui(QMainWindow):
                 if w.isVisible():
                     active_windows.append(w)
             except RuntimeError:
-                # El objeto C++ fue destruido al cerrar la ventana, lo ignoramos
                 pass 
         self.plot_windows = active_windows
 
         sem_data = self.data_manager.sem_data.astype(float)
         ebic_data = self.data_manager.current_map.astype(float)
 
-        # Usar la misma lógica de visualización 1D para cada nanohilo
         for idx, ((sx, sy), (ex, ey)) in enumerate(self.detected_nws_data):
             c1, r1 = self.phys_to_px(sx, sy)
             c2, r2 = self.phys_to_px(ex, ey)
@@ -1320,89 +1556,9 @@ class CorrelationGui(QMainWindow):
             
             dist_um = np.linspace(0, np.hypot(ex - sx, ey - sy), N)
             
-            # Abre una ventana de perfil para el NW (Reutilizando tu ProfilePlotWindow)
             win = ProfilePlotWindow(f"NW_{idx+1}", dist_um, sem_prof, ebic_prof, ['sem', 'abs_i'], self.unit_label)
             win.show()
             self.plot_windows.append(win)
-
-    # --- MOUSE EVENTS ---
-    def on_mouse_press(self, event):
-        if event.inaxes != self.ax: return
-        
-        if self.mode == 'view' and self.profile_manager.on_press(event):
-            return 
-        
-        try:
-            if self.mode == 'pan':
-                self.pan_start = (event.xdata, event.ydata)
-                self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
-            elif self.mode == 'line':
-                if len(self.stored_lines) >= 1:
-                    for l in self.stored_lines: l.remove()
-                    self.stored_lines.clear()
-                    self.profile_manager.clear()
-                    
-                self.line_start_point = (event.xdata, event.ydata)
-                self.current_line_artist = Line2D([event.xdata, event.xdata], 
-                                                  [event.ydata, event.ydata], 
-                                                  color='red', linewidth=2)
-                self.ax.add_line(self.current_line_artist)
-                self.canvas.draw()
-        except: pass
-
-    def on_mouse_release(self, event):
-        if self.mode == 'view' and self.profile_manager.on_release(event): return
-
-        try:
-            if self.mode == 'pan':
-                self.pan_start = None
-                self.canvas.setCursor(Qt.CursorShape.OpenHandCursor)
-            elif self.mode == 'line':
-                if self.current_line_artist:
-                    self.stored_lines.append(self.current_line_artist)
-                    self.current_line_artist = None
-                    self.line_start_point = None
-        except: pass
-
-    def on_mouse_move(self, event):
-        try:
-            if event.inaxes:
-                px_x = int(event.xdata / self.pixel_size_phys)
-                px_y = int((self.height_phys - event.ydata) / self.pixel_size_phys)
-                px_x = max(0, min(px_x, self.img_width - 1))
-                px_y = max(0, min(px_y, self.img_height - 1))
-                self.lbl_coords.setText(f"Coordinates (Px): X {px_x}, Y {px_y}")
-            else:
-                self.lbl_coords.setText("Coordinates (Px): - , -")
-                return
-        except: pass
-
-        if self.mode == 'view' and self.profile_manager.on_drag(event): return
-
-        try:
-            if self.mode == 'pan' and self.pan_start:
-                dx = event.xdata - self.pan_start[0]
-                dy = event.ydata - self.pan_start[1]
-                
-                new_xlim = [self.ax.get_xlim()[0] - dx, self.ax.get_xlim()[1] - dx]
-                new_ylim = [self.ax.get_ylim()[0] - dy, self.ax.get_ylim()[1] - dy]
-
-                if new_xlim[0] < 0: new_xlim = [0, new_xlim[1] - new_xlim[0]]
-                elif new_xlim[1] > self.width_phys: new_xlim = [self.width_phys - (new_xlim[1] - new_xlim[0]), self.width_phys]
-                    
-                if new_ylim[0] < 0: new_ylim = [0, new_ylim[1] - new_ylim[0]]
-                elif new_ylim[1] > self.height_phys: new_ylim = [self.height_phys - (new_ylim[1] - new_ylim[0]), self.height_phys]
-
-                self.ax.set_xlim(new_xlim)
-                self.ax.set_ylim(new_ylim)
-                self.draw_scale_bar()
-                self.canvas.draw()
-                
-            elif self.mode == 'line' and self.line_start_point and self.current_line_artist:
-                self.current_line_artist.set_data([self.line_start_point[0], event.xdata], 
-                                                  [self.line_start_point[1], event.ydata])
-                self.canvas.draw()
-        except: pass
 
     def zoom_fun(self, event):
         if self.width_phys == 0: return
@@ -1424,13 +1580,14 @@ class CorrelationGui(QMainWindow):
             new_xlim = [xdata - new_width * (1 - relx), xdata + new_width * relx]
             new_ylim = [ydata - new_height * (1 - rely), ydata + new_height * rely]
 
+            # Bounding Box zoom safety
             if new_xlim[0] < 0 or new_xlim[1] > self.width_phys: new_xlim = [0, self.width_phys]
             if new_ylim[0] < 0 or new_ylim[1] > self.height_phys: new_ylim = [0, self.height_phys]
 
             self.ax.set_xlim(new_xlim)
             self.ax.set_ylim(new_ylim)
             self.draw_scale_bar()
-            self.canvas.draw()
+            self.canvas.draw_idle()
         except: pass
 
     # ==========================================================
@@ -1444,11 +1601,9 @@ class CorrelationGui(QMainWindow):
                 self.lbl_sweep_status.setText(f"Status: Loaded -> {file_path.split('/')[-1]}")
                 self.btn_check_sweep.setEnabled(False)
                 
-                # --- NUEVO: RENDERIZAR LA PREVISUALIZACIÓN ---
+                # --- PREVISUALIZACIÓN DE IMAGEN ---
                 if self.sweep_data_manager.sem_data is not None:
                     data = self.sweep_data_manager.sem_data
-                    
-                    # Normalizar los datos de la matriz a 0-255 (escala de grises 8-bit)
                     vmin = np.nanmin(data)
                     vmax = np.nanmax(data)
                     if vmax > vmin:
@@ -1458,12 +1613,9 @@ class CorrelationGui(QMainWindow):
                     
                     height, width = norm_data.shape
                     bytes_per_line = width
-                    
-                    # Crear QImage y convertir a QPixmap
                     q_img = QImage(norm_data.data, width, height, bytes_per_line, QImage.Format.Format_Grayscale8)
                     pixmap = QPixmap.fromImage(q_img)
                     
-                    # Escalar manteniendo la proporción de aspecto
                     self.lbl_sweep_preview.setPixmap(pixmap.scaled(
                         self.lbl_sweep_preview.size(), 
                         Qt.AspectRatioMode.KeepAspectRatio, 
@@ -1472,12 +1624,8 @@ class CorrelationGui(QMainWindow):
             else:
                 QMessageBox.warning(self, "Error", "Failed to load sweep image.")
 
-
     def _estimate_translation(self, ref, img):
-        """
-        Estimate (dx, dy) pixel shift to map ref coords to img coords
-        using FFT cross-correlation (or OpenCV phaseCorrelate if available).
-        """
+        """Estimate (dx, dy) pixel shift using FFT cross-correlation"""
         def make_composite(sem_img):
             a = np.asarray(sem_img, dtype=float)
             return (a - np.mean(a)) / (np.std(a) + 1e-12)
@@ -1485,47 +1633,34 @@ class CorrelationGui(QMainWindow):
         A = make_composite(ref)
         B = make_composite(img)
 
-        # Crop to common shape if sizes differ
         if A.shape != B.shape:
             minr = min(A.shape[0], B.shape[0])
             minc = min(A.shape[1], B.shape[1])
             A = A[:minr, :minc]
             B = B[:minr, :minc]
 
-        # Try OpenCV phaseCorrelate for subpixel accuracy
         try:
             import cv2
             A32 = np.float32(A)
             B32 = np.float32(B)
-            try:
-                win = cv2.createHanningWindow(A32.shape[::-1], cv2.CV_32F)
-                Aw = A32 * win
-                Bw = B32 * win
-            except Exception:
-                Aw = A32
-                Bw = B32
-            shift, _ = cv2.phaseCorrelate(Aw, Bw)
+            shift, _ = cv2.phaseCorrelate(A32, B32)
             return float(shift[0]), float(shift[1])
         except Exception:
-            # Fallback: integer-pixel FFT cross-correlation
+            # Fallback: FFT cross-correlation
             fa = np.fft.fft2(A - np.mean(A))
             fb = np.fft.fft2(B - np.mean(B))
             cross = np.fft.ifft2(fa * np.conj(fb))
             cross_abs = np.abs(cross)
             shift_y, shift_x = np.unravel_index(np.argmax(cross_abs), cross_abs.shape)
             
-            if shift_x > cross.shape[1] // 2:
-                shift_x -= cross.shape[1]
-            if shift_y > cross.shape[0] // 2:
-                shift_y -= cross.shape[0]
-            
+            if shift_x > cross.shape[1] // 2: shift_x -= cross.shape[1]
+            if shift_y > cross.shape[0] // 2: shift_y -= cross.shape[0]
             return float(shift_x), float(shift_y)
 
     def detect_sweep(self):
         if self.data_manager.sem_data is None or self.sweep_data_manager.sem_data is None:
             QMessageBox.warning(self, "Error", "Load both Base and Sweep images first.")
             return
-
         self.status_bar.showMessage("Computing global pixel shift using FFT... Please wait.", 5000)
         
         try:
@@ -1533,10 +1668,8 @@ class CorrelationGui(QMainWindow):
                 self.data_manager.sem_data, 
                 self.sweep_data_manager.sem_data
             )
-            
             self.sweep_dx = dx
             self.sweep_dy = dy
-            
             self.btn_check_sweep.setEnabled(True)
             self.status_bar.showMessage(f"Sweep Detection Complete! Shift: dx={dx:.2f}, dy={dy:.2f}", 5000)
             QMessageBox.information(self, "Success", f"Shift found: X={dx:.2f}px, Y={dy:.2f}px.\nYou can now check the alignment.")
@@ -1544,33 +1677,24 @@ class CorrelationGui(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to compute shift:\n{e}")
 
     def check_sweep(self):
-
         active_windows = []
         for w in self.plot_windows:
             try:
-                if w.isVisible():
-                    active_windows.append(w)
-            except RuntimeError:
-                pass 
+                if w.isVisible(): active_windows.append(w)
+            except RuntimeError: pass 
         self.plot_windows = active_windows
 
         fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharex=True, sharey=True)
-        
         base_img = self.data_manager.sem_data
         sweep_img = self.sweep_data_manager.sem_data
         
-        # 1. Base Image
         axes[0].imshow(base_img, cmap='gray')
         axes[0].set_title("1. Base Image (Reference)")
         
-        # 2. Sweep Image (Uncorrected)
         axes[1].imshow(sweep_img, cmap='gray')
         axes[1].set_title("2. Sweep Image (Drifted)")
         
-        # 3. Sweep Image (Shifted back to align with Base)
-        # We shift the drifted image by (-dx, -dy) to match the reference.
         shifted_sweep = ndi.shift(sweep_img, shift=(-self.sweep_dy, -self.sweep_dx), mode='nearest')
-        
         axes[2].imshow(shifted_sweep, cmap='gray')
         axes[2].set_title(f"3. Sweep Corrected (Shift: {-self.sweep_dx:.1f}, {-self.sweep_dy:.1f})")
 
