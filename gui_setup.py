@@ -783,12 +783,23 @@ class CorrelationGui(QMainWindow):
         self.canvas.draw()
 
     # --- LOAD LOGIC ---
+    # --- LOAD LOGIC ---
     def upload_image(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Load TIF", "", "TIF Files (*.tif *.tiff)")
         if file_path:
             self.reset_entire_state()
             success = self.data_manager.load_file(file_path)
             if success:
+                # --- NUEVO: Protección contra imágenes RGB (3D) ---
+                if self.data_manager.sem_data.ndim == 3:
+                    # Nos quedamos solo con el primer canal de color (índice 0)
+                    self.data_manager.sem_data = self.data_manager.sem_data[:, :, 0]
+                
+                # Aplicamos la misma protección al mapa EBIC por si acaso
+                if self.data_manager.current_map is not None and self.data_manager.current_map.ndim == 3:
+                    self.data_manager.current_map = self.data_manager.current_map[:, :, 0]
+                # --------------------------------------------------
+
                 self.img_height, self.img_width = self.data_manager.sem_data.shape
                 self.initialize_plot()
             else:
@@ -820,10 +831,14 @@ class CorrelationGui(QMainWindow):
             if vmin == vmax: vmax += 1.0 
             self.layer_sem.set_clim(vmin, vmax)
             
+            # --- CAMBIAR LA LÓGICA DEL TÍTULO ---
+            file_str = f" | {self.current_filename}" if hasattr(self, 'current_filename') and self.current_filename else ""
+            overlay_str = " + EBIC Overlay" if self.show_overlay else ""
+            
             if self.current_frame_idx == 0:
-                self.ax.set_title("SEM View (Frame 0)" + (" + EBIC Overlay" if self.show_overlay else ""))
+                self.ax.set_title(f"SEM View (Frame 0){overlay_str}{file_str}")
             elif self.current_frame_idx == 1:
-                self.ax.set_title("Raw EBIC View (Frame 1)" + (" + EBIC Overlay" if self.show_overlay else ""))
+                self.ax.set_title(f"Raw EBIC View (Frame 1){overlay_str}{file_str}")
             
             self.update_frame_ui()
             self.canvas.draw()
@@ -1022,6 +1037,9 @@ class CorrelationGui(QMainWindow):
         self.lbl_sweep_preview.clear()
         self.lbl_sweep_preview.setText("No image preview")
 
+        self.current_filename = None
+        self.setWindowTitle("Map Operations Master")
+
         self.show_placeholder()
 
     def initialize_plot(self):
@@ -1078,7 +1096,9 @@ class CorrelationGui(QMainWindow):
         
         self.ax.set_xlabel(f"Distance ({self.unit_label})")
         self.ax.set_ylabel(f"Distance ({self.unit_label})")
-        self.ax.set_title("SEM View (Frame 0)")
+        file_str = f" | {self.current_filename}" if hasattr(self, 'current_filename') and self.current_filename else ""
+        self.ax.set_title(f"SEM View (Frame 0){file_str}")
+        
         self.ax.grid(self.btn_grid.isChecked())
         
         self.ax.set_xlim(0, self.width_phys)
@@ -1413,8 +1433,12 @@ class CorrelationGui(QMainWindow):
             if self.cbar:
                 self.cbar.ax.set_visible(self.show_overlay)
             
+            # --- CAMBIAR LA LÓGICA DEL TÍTULO ---
+            file_str = f" | {self.current_filename}" if hasattr(self, 'current_filename') and self.current_filename else ""
             base_title = "SEM View (Frame 0)" if self.current_frame_idx == 0 else "Raw EBIC View (Frame 1)"
-            self.ax.set_title(base_title + (" + EBIC Overlay" if self.show_overlay else ""))
+            overlay_str = " + EBIC Overlay" if self.show_overlay else ""
+            
+            self.ax.set_title(f"{base_title}{overlay_str}{file_str}")
             self.canvas.draw_idle()
 
     def update_layer_props(self, _=None):
@@ -1474,6 +1498,8 @@ class CorrelationGui(QMainWindow):
             step_px=2,
             expected_nw_count=expected_nws
         )
+
+        self.last_nw_run_parameters = run_parameters
 
         if not nw_lines_px:
             QMessageBox.information(self, "No NWs", "No Nanowires detected. Try lowering the peak prominence threshold.")
@@ -1543,6 +1569,12 @@ class CorrelationGui(QMainWindow):
         sem_data = self.data_manager.sem_data.astype(float)
         ebic_data = self.data_manager.current_map.astype(float)
 
+        # Preparamos la cadena de parámetros para presentar todas las variables en juego
+        param_str = ""
+        if hasattr(self, 'last_nw_run_parameters'):
+            p = self.last_nw_run_parameters
+            param_str = f" | Prom: {p['rel_prominence']}, Search: {p['search_width_px']}px"
+
         for idx, ((sx, sy), (ex, ey)) in enumerate(self.detected_nws_data):
             c1, r1 = self.phys_to_px(sx, sy)
             c2, r2 = self.phys_to_px(ex, ey)
@@ -1558,7 +1590,11 @@ class CorrelationGui(QMainWindow):
             
             dist_um = np.linspace(0, np.hypot(ex - sx, ey - sy), N)
             
-            win = ProfilePlotWindow(f"NW_{idx+1}", dist_um, sem_prof, ebic_prof, ['sem', 'abs_i'], self.unit_label)
+            # --- CAMBIOS AQUÍ ---
+            # 1. Título con parámetros integrados
+            # 2. Pasamos 'i' en lugar de 'abs_i' en la lista de outputs
+            win_title = f"NW_{idx+1}{param_str}"
+            win = ProfilePlotWindow(win_title, dist_um, sem_prof, ebic_prof, ['sem', 'i'], self.unit_label)
             win.show()
             self.plot_windows.append(win)
 
@@ -1600,6 +1636,11 @@ class CorrelationGui(QMainWindow):
         if file_path:
             success = self.sweep_data_manager.load_file(file_path)
             if success:
+                # --- NUEVO: Protección contra imágenes RGB (3D) ---
+                if self.sweep_data_manager.sem_data is not None and self.sweep_data_manager.sem_data.ndim == 3:
+                    self.sweep_data_manager.sem_data = self.sweep_data_manager.sem_data[:, :, 0]
+                # --------------------------------------------------
+
                 self.lbl_sweep_status.setText(f"Status: Loaded -> {file_path.split('/')[-1]}")
                 self.btn_check_sweep.setEnabled(False)
                 

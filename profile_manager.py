@@ -81,6 +81,7 @@ class ProfilePlotWindow(QMainWindow):
         # Cálculos de datos
         self.dist = dist
         self.sem_norm = (sem - np.min(sem)) / (np.ptp(sem) + 1e-12)
+        self.i = ebic
         self.abs_i = np.abs(ebic)
         
         # Storage for fit results
@@ -101,6 +102,10 @@ class ProfilePlotWindow(QMainWindow):
             if key == 'sem':
                 ax.plot(dist, self.sem_norm, color='tab:blue', lw=2)
                 ax.set_ylabel("SEM norm", color='tab:blue', fontweight='bold')
+            elif key == 'i':  # <--- AÑADE ESTE BLOQUE
+                ax.plot(dist, self.i, color='tab:purple', lw=2)
+                ax.set_ylabel("I [nA]", color='tab:purple', fontweight='bold')
+                ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
             elif key == 'abs_i':
                 ax.plot(dist, self.abs_i, color='tab:red', lw=2)
                 ax.set_ylabel("abs(I) [nA]", color='tab:red', fontweight='bold')
@@ -130,8 +135,9 @@ class ProfilePlotWindow(QMainWindow):
     def save_csv(self):
         path, _ = QFileDialog.getSaveFileName(self, "Save CSV", f"Perpendicular_{self.windowTitle().split()[1]}.csv", "CSV (*.csv)")
         if path:
-            header = "Distance,SEM_norm,abs_I,ln_abs_I,deriv_ln_I"
-            data = np.column_stack([self.dist, self.sem_norm, self.abs_i, self.ln_i, self.deriv])
+            # Actualizamos el encabezado y los datos para incluir I_raw
+            header = "Distance,SEM_norm,I_raw,abs_I,ln_abs_I,deriv_ln_I"
+            data = np.column_stack([self.dist, self.sem_norm, self.i, self.abs_i, self.ln_i, self.deriv])
             np.savetxt(path, data, delimiter=',', header=header, comments='', fmt='%.6e')
     
     def _find_ln_i_axis(self, selected_keys):
