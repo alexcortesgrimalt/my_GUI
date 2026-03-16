@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QStatusBar, QButtonGroup, QSlider,
                              QComboBox, QMenu, QToolButton, QTabWidget,
                              QDoubleSpinBox, QCheckBox, QMessageBox, QSpinBox,
-                             QScrollArea, QGroupBox)
+                             QScrollArea, QGroupBox, QInputDialog)
 from PyQt6.QtGui import QAction, QImage, QPixmap
 from PyQt6.QtCore import Qt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -345,6 +345,11 @@ class CorrelationGui(QMainWindow):
         upload_action.triggered.connect(self.upload_image)
         toolbar.addAction(upload_action)
 
+        correlate_action = QAction("Correlate Maps (M1 ± M2)", self)
+        correlate_action.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_FileDialogDetailedView))
+        correlate_action.triggered.connect(self.action_correlate_maps)
+        toolbar.addAction(correlate_action)
+
         save_button = QToolButton()
         save_button.setText("Save")
         save_button.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_DialogSaveButton))
@@ -480,7 +485,17 @@ class CorrelationGui(QMainWindow):
         lbl_props = QLabel("Visualization")
         lbl_props.setStyleSheet("font-weight: bold; font-size: 14px;")
         vis_layout.addWidget(lbl_props)
-        vis_layout.addSpacing(20)
+        vis_layout.addSpacing(15)
+
+        # --- NUEVO: Selector de Overlay ---
+        lbl_overlay_type = QLabel("Overlay Mode:")
+        self.combo_overlay = QComboBox()
+        self.combo_overlay.addItems(["EBIC (Current)", "Voltage Contrast"])
+        self.combo_overlay.currentTextChanged.connect(self.toggle_overlay)
+        vis_layout.addWidget(lbl_overlay_type)
+        vis_layout.addWidget(self.combo_overlay)
+        vis_layout.addSpacing(15)
+        # ---------------------------------
 
         lbl_cmap = QLabel("Color Palette:")
         self.combo_cmap = QComboBox()
@@ -491,7 +506,8 @@ class CorrelationGui(QMainWindow):
         vis_layout.addWidget(self.combo_cmap)
         vis_layout.addSpacing(20)
 
-        self.lbl_opacity = QLabel(f"EBIC Intensity: {int(self.opacity*100)}%")
+        # Hacer la etiqueta genérica
+        self.lbl_opacity = QLabel(f"Overlay Intensity: {int(self.opacity*100)}%")
         self.slider_opacity = QSlider(Qt.Orientation.Horizontal)
         self.slider_opacity.setMinimum(0)
         self.slider_opacity.setMaximum(100)
@@ -805,6 +821,70 @@ class CorrelationGui(QMainWindow):
             else:
                 self.show_placeholder()
 
+    # ==========================================================
+    # --- CORRELATE MAPS LOGIC ---
+    # ==========================================================
+    def action_correlate_maps(self):
+        # 1. Verificar que M1 y M2 están en memoria
+        if self.data_manager.sem_data is None:
+            QMessageBox.warning(self, "Error", "M1 is not loaded. Please load the main map first.")
+            return
+        if self.sweep_data_manager.sem_data is None:
+            QMessageBox.warning(self, "Error", "M2 is not loaded. Go to the 'Sweep' tab, load the second map, and run 'Detect Sweep' first.")
+            return
+
+        # 2. Verificar que el EBIC/EBAC existe en ambos
+        if self.data_manager.current_map is None or self.sweep_data_manager.current_map is None:
+            QMessageBox.warning(self, "Error", "Both M1 and M2 must contain current maps (EBIC) to correlate.")
+            return
+
+        # 3. Advertencia si no se ha calculado el drift (Sweep = 0,0)
+        if self.sweep_dx == 0.0 and self.sweep_dy == 0.0:
+            reply = QMessageBox.question(self, "Warning", "Calculated drift is 0.0. Did you forget to click 'Detect Sweep' in the Sweep tab?", 
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if reply == QMessageBox.StandardButton.No: return
+
+        # 4. Seleccionar operación
+        items = [
+            "(M1 + M2) / 2   [Symmetric / EBAC]", 
+            "(M1 - M2) / 2   [Asymmetric / Pure EBIC]"
+        ]
+        item, ok = QInputDialog.getItem(self, "Select Operation", "Choose correlation operation:", items, 0, False)
+        
+        if ok and item:
+            # 5. ALINEACIÓN FÍSICA (Drift Correction) PRE-OPERACIÓN
+            ebic_m1 = self.data_manager.current_map.astype(float)
+            ebic_m2 = self.sweep_data_manager.current_map.astype(float)
+            sem_m1 = self.data_manager.sem_data.astype(float)
+            sem_m2 = self.sweep_data_manager.sem_data.astype(float)
+            
+            # Desplazamos M2 usando la inversa del drift detectado (interpolación nearest para no crear artefactos en bordes)
+            ebic_m2_aligned = ndi.shift(ebic_m2, shift=(-self.sweep_dy, -self.sweep_dx), mode='nearest')
+            sem_m2_aligned = ndi.shift(sem_m2, shift=(-self.sweep_dy, -self.sweep_dx), mode='nearest')
+            
+            # 6. Operación Matemática
+            if "+" in item:
+                new_ebic = (ebic_m1 + ebic_m2_aligned) / 2.0
+                op_name = "Sum M1+M2"
+            else:
+                new_ebic = (ebic_m1 - ebic_m2_aligned) / 2.0
+                op_name = "Diff M1-M2"
+                
+            # Sobrescribimos el mapa actual de M1 con el resultado
+            self.data_manager.current_map = new_ebic
+            # Promediamos el SEM de M1 y el M2 alineado para mejorar la relación señal-ruido del fondo
+            self.data_manager.sem_data = (sem_m1 + sem_m2_aligned) / 2.0
+            
+            # 7. Trazabilidad: Guardamos las variables y parámetros aplicados para el título del gráfico
+            drift_x_str = f"{-self.sweep_dx:.2f}"
+            drift_y_str = f"{-self.sweep_dy:.2f}"
+            self.current_filename = f"Correlated ({op_name}) | Shift: X={drift_x_str}px, Y={drift_y_str}px"
+            
+            # 8. Resetear y dibujar el nuevo estado
+            self.action_home_reset() 
+            self.initialize_plot()   
+            self.status_bar.showMessage(f"Maps correlated perfectly. Drift corrected: X={drift_x_str}, Y={drift_y_str}.", 6000)
+
     # --- FRAME NAVIGATION ---
     def update_frame_ui(self):
         total = len(self.frames_list)
@@ -1093,6 +1173,22 @@ class CorrelationGui(QMainWindow):
             self.cbar.set_label('Current (nA)', rotation=270, labelpad=15)
             self.layer_ebic.set_visible(False)
             self.cbar.ax.set_visible(False)
+
+        self.layer_voltage = None
+        self.cbar_voltage = None
+
+        if hasattr(self.data_manager, 'voltage_map') and self.data_manager.voltage_map is not None:
+            data_vc = self.data_manager.voltage_map
+            vmin_vc = np.nanmin(data_vc)
+            vmax_vc = np.nanmax(data_vc)
+            
+            self.layer_voltage = self.ax.imshow(data_vc, cmap=self.current_cmap, alpha=self.opacity, 
+                                                 interpolation='nearest', aspect='equal', extent=extent_physical,
+                                                 vmin=vmin_vc, vmax=vmax_vc)
+            self.cbar_voltage = self.fig.colorbar(self.layer_voltage, ax=self.ax, fraction=0.046, pad=0.04)
+            self.cbar_voltage.set_label('Voltage (V)', rotation=270, labelpad=15)
+            self.layer_voltage.set_visible(False)
+            self.cbar_voltage.ax.set_visible(False)
         
         self.ax.set_xlabel(f"Distance ({self.unit_label})")
         self.ax.set_ylabel(f"Distance ({self.unit_label})")
@@ -1426,31 +1522,57 @@ class CorrelationGui(QMainWindow):
             self.ax.grid(self.btn_grid.isChecked())
             self.canvas.draw_idle()
 
-    def toggle_overlay(self):
+    def toggle_overlay(self, _=None):
         self.show_overlay = self.btn_overlay.isChecked()
+        mode = getattr(self, 'combo_overlay', None)
+        active_mode = mode.currentText() if mode else "EBIC (Current)"
+        
+        # 1. Apagar ambas capas gráficamente por defecto
         if self.layer_ebic:
-            self.layer_ebic.set_visible(self.show_overlay)
-            if self.cbar:
-                self.cbar.ax.set_visible(self.show_overlay)
+            self.layer_ebic.set_visible(False)
+            if self.cbar: self.cbar.ax.set_visible(False)
+        if getattr(self, 'layer_voltage', None):
+            self.layer_voltage.set_visible(False)
+            if self.cbar_voltage: self.cbar_voltage.ax.set_visible(False)
             
-            # --- CAMBIAR LA LÓGICA DEL TÍTULO ---
-            file_str = f" | {self.current_filename}" if hasattr(self, 'current_filename') and self.current_filename else ""
-            base_title = "SEM View (Frame 0)" if self.current_frame_idx == 0 else "Raw EBIC View (Frame 1)"
-            overlay_str = " + EBIC Overlay" if self.show_overlay else ""
+        # 2. Encender la seleccionada si el botón global está activado
+        overlay_str = ""
+        if self.show_overlay:
+            op_str = f"Op: {int(self.opacity*100)}%"
             
-            self.ax.set_title(f"{base_title}{overlay_str}{file_str}")
-            self.canvas.draw_idle()
+            if active_mode == "EBIC (Current)" and self.layer_ebic:
+                self.layer_ebic.set_visible(True)
+                if self.cbar: self.cbar.ax.set_visible(True)
+                overlay_str = f" + EBIC Overlay ({op_str})"
+                
+            elif active_mode == "Voltage Contrast" and getattr(self, 'layer_voltage', None):
+                self.layer_voltage.set_visible(True)
+                if self.cbar_voltage: self.cbar_voltage.ax.set_visible(True)
+                overlay_str = f" + Voltage Contrast Overlay ({op_str})"
+
+        # 3. Presentación de parámetros en juego
+        file_str = f" | {self.current_filename}" if hasattr(self, 'current_filename') and self.current_filename else ""
+        base_title = "SEM View (Frame 0)" if self.current_frame_idx == 0 else "Raw EBIC View (Frame 1)"
+        self.ax.set_title(f"{base_title}{overlay_str}{file_str}")
+        
+        self.canvas.draw_idle()
 
     def update_layer_props(self, _=None):
         val = self.slider_opacity.value()
         self.opacity = val / 100.0
-        self.lbl_opacity.setText(f"EBIC Intensity: {val}%")
+        self.lbl_opacity.setText(f"Overlay Intensity: {val}%")
+        
+        cmap_name = self.combo_cmap.currentText()
         
         if self.layer_ebic:
             self.layer_ebic.set_alpha(self.opacity)
-            cmap_name = self.combo_cmap.currentText()
             self.layer_ebic.set_cmap(cmap_name)
-            self.canvas.draw_idle()
+        if getattr(self, 'layer_voltage', None):
+            self.layer_voltage.set_alpha(self.opacity)
+            self.layer_voltage.set_cmap(cmap_name)
+            
+        # Llamar al toggle actualiza el título forzosamente con el nuevo valor %
+        self.toggle_overlay()
 
     # ==========================================================
     # --- NANOWIRES DETECTION LOGIC ---
