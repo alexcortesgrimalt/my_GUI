@@ -727,6 +727,11 @@ class CorrelationGui(QMainWindow):
         nws_layout.addWidget(lbl_nws_search)
         nws_layout.addWidget(self.spin_nw_search)
 
+        self.chk_nw_inverse = QCheckBox("Inverse Detection (Find Minima)")
+        self.chk_nw_inverse.setChecked(False)
+        nws_layout.addWidget(self.chk_nw_inverse)
+        nws_layout.addSpacing(10)
+
         self.btn_detect_nws = QPushButton("Detect NWs")
         self.btn_detect_nws.setStyleSheet("QPushButton { font-weight: bold; background-color: #ffeeba; padding: 6px; }")
         self.btn_detect_nws.clicked.connect(self.action_detect_nws)
@@ -1401,16 +1406,19 @@ class CorrelationGui(QMainWindow):
             cb_abs = QCheckBox("b) abs(I)")
             cb_ln = QCheckBox("c) ln abs(I)")
             cb_deriv = QCheckBox("d) d ln(abs(I)) / dx")
+            cb_vc = QCheckBox("e) Voltage Contrast") # <--- AÑADIDO
             
             cb_sem.setChecked(True)
             cb_abs.setChecked(True)
             cb_ln.setChecked(True)
             cb_deriv.setChecked(True)
+            cb_vc.setChecked(False) # <--- AÑADIDO (Desmarcado por defecto o True, como prefieras)
             
             vbox.addWidget(cb_sem)
             vbox.addWidget(cb_abs)
             vbox.addWidget(cb_ln)
             vbox.addWidget(cb_deriv)
+            vbox.addWidget(cb_vc) # <--- AÑADIDO
             
             self.scroll_layout.addWidget(gb)
             
@@ -1419,7 +1427,8 @@ class CorrelationGui(QMainWindow):
                 'sem': cb_sem,
                 'abs_i': cb_abs,
                 'ln_i': cb_ln,
-                'deriv': cb_deriv
+                'deriv': cb_deriv,
+                'vc': cb_vc # <--- AÑADIDO AL DICCIONARIO
             }
 
     def extract_profiles_data(self):
@@ -1448,6 +1457,7 @@ class CorrelationGui(QMainWindow):
             if ui_elements['abs_i'].isChecked(): selected_keys.append('abs_i')
             if ui_elements['ln_i'].isChecked(): selected_keys.append('ln_i')
             if ui_elements['deriv'].isChecked(): selected_keys.append('deriv')
+            if ui_elements['vc'].isChecked(): selected_keys.append('vc')
             
             if not selected_keys: 
                 continue
@@ -1473,10 +1483,11 @@ class CorrelationGui(QMainWindow):
                 
             sem_prof = ndi.map_coordinates(sem_data, [r_vals, c_vals], order=1, mode='nearest')
             ebic_prof = ndi.map_coordinates(ebic_data, [r_vals, c_vals], order=1, mode='nearest')
+            vc_prof = ndi.map_coordinates(vc_data, [r_vals, c_vals], order=1, mode='nearest')
             
             dist_um = np.linspace(0, np.hypot(P2x - P1x, P2y - P1y), N)
             
-            win = ProfilePlotWindow(prof.idx, dist_um, sem_prof, ebic_prof, selected_keys, self.unit_label)
+            win = ProfilePlotWindow(prof.idx, dist_um, sem_prof, ebic_prof, vc_prof, selected_keys, self.unit_label)
             win.show()
             self.plot_windows.append(win)
 
@@ -1589,6 +1600,7 @@ class CorrelationGui(QMainWindow):
         for line in self.nw_artists:
             try: line.remove()
             except: pass
+
         self.nw_artists.clear()
         self.nw_arrows.clear()
         self.nw_texts.clear()
@@ -1608,10 +1620,13 @@ class CorrelationGui(QMainWindow):
 
         detector = NWDetector(pixel_size_m)
         ebic_map = self.data_manager.current_map.astype(float)
+
+        is_inverse = self.chk_nw_inverse.isChecked()
+        detect_map = -ebic_map if is_inverse else ebic_map
         
         # Ejecutar detección original
         nw_lines_px, tracked_points_px, run_parameters = detector.detect_and_track(
-            ebic_map, 
+            detect_map, 
             (c0, r0), 
             (c1, r1), 
             length_px, 
@@ -1621,6 +1636,7 @@ class CorrelationGui(QMainWindow):
             expected_nw_count=expected_nws
         )
 
+        run_parameters['inverse_detection'] = is_inverse
         self.last_nw_run_parameters = run_parameters
 
         if not nw_lines_px:
@@ -1689,13 +1705,16 @@ class CorrelationGui(QMainWindow):
         self.plot_windows = active_windows
 
         sem_data = self.data_manager.sem_data.astype(float)
-        ebic_data = self.data_manager.current_map.astype(float)
+        ebic_data = self.data_manager.current_map.astype(float) if self.data_manager.current_map is not None else np.zeros_like(sem_data)
+        vc_data = self.data_manager.voltage_map.astype(float) if getattr(self.data_manager, 'voltage_map', None) is not None else np.zeros_like(sem_data)
 
+        # Preparamos la cadena de parámetros para presentar todas las variables en juego
         # Preparamos la cadena de parámetros para presentar todas las variables en juego
         param_str = ""
         if hasattr(self, 'last_nw_run_parameters'):
             p = self.last_nw_run_parameters
-            param_str = f" | Prom: {p['rel_prominence']}, Search: {p['search_width_px']}px"
+            inv_str = " | Mode: Inverse (Minima)" if p.get('inverse_detection', False) else " | Mode: Normal (Maxima)"
+            param_str = f" | Prom: {p['rel_prominence']}, Search: {p['search_width_px']}px{inv_str}"
 
         for idx, ((sx, sy), (ex, ey)) in enumerate(self.detected_nws_data):
             c1, r1 = self.phys_to_px(sx, sy)
@@ -1709,14 +1728,11 @@ class CorrelationGui(QMainWindow):
             
             sem_prof = ndi.map_coordinates(sem_data, [r_vals, c_vals], order=1, mode='nearest')
             ebic_prof = ndi.map_coordinates(ebic_data, [r_vals, c_vals], order=1, mode='nearest')
+            vc_prof = ndi.map_coordinates(vc_data, [r_vals, c_vals], order=1, mode='nearest')
             
             dist_um = np.linspace(0, np.hypot(ex - sx, ey - sy), N)
-            
-            # --- CAMBIOS AQUÍ ---
-            # 1. Título con parámetros integrados
-            # 2. Pasamos 'i' en lugar de 'abs_i' en la lista de outputs
             win_title = f"NW_{idx+1}{param_str}"
-            win = ProfilePlotWindow(win_title, dist_um, sem_prof, ebic_prof, ['sem', 'i'], self.unit_label)
+            win = ProfilePlotWindow(win_title, dist_um, sem_prof, ebic_prof, vc_prof, ['i', 'vc'], self.unit_label)
             win.show()
             self.plot_windows.append(win)
 

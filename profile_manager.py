@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from PyQt6.QtWidgets import (QMainWindow, QToolBar, QFileDialog, QMessageBox, QDialog,
                              QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QDoubleSpinBox, QPushButton)
 from PyQt6.QtGui import QAction
@@ -33,7 +34,8 @@ def gradient_with_window(x, y, window=9):
 
 class ProfilePlotWindow(QMainWindow):
     """Ventana individual para mostrar los gráficos de una perpendicular."""
-    def __init__(self, prof_idx, dist, sem, ebic, selected_keys, unit_label="\u03BCm"):
+    # OJO: Se ha añadido el parámetro 'vc'
+    def __init__(self, prof_idx, dist, sem, ebic, vc, selected_keys, unit_label="\u03BCm"):
         super().__init__()
         self.setWindowTitle(f"Perpendicular {prof_idx} Data")
         self.resize(700, 200 * len(selected_keys) + 100)
@@ -42,7 +44,13 @@ class ProfilePlotWindow(QMainWindow):
         # Crear los subplots dinámicamente según las selecciones
         self.fig, self.axes = plt.subplots(len(selected_keys), 1, sharex=True)
         self.canvas = FigureCanvas(self.fig)
+        
+        # 1. El lienzo (canvas) es el widget central
         self.setCentralWidget(self.canvas)
+
+        # 2. La barra interactiva de Matplotlib es un QToolBar, la añadimos nativamente
+        self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        self.addToolBar(self.toolbar)
         
         # Barra de herramientas para exportar
         toolbar = QToolBar("Export Tools")
@@ -83,6 +91,7 @@ class ProfilePlotWindow(QMainWindow):
         self.sem_norm = (sem - np.min(sem)) / (np.ptp(sem) + 1e-12)
         self.i = ebic
         self.abs_i = np.abs(ebic)
+        self.vc = vc # <--- GUARDAMOS LOS DATOS DE VOLTAJE AQUÍ
         
         # Storage for fit results
         self.properties = None
@@ -102,7 +111,7 @@ class ProfilePlotWindow(QMainWindow):
             if key == 'sem':
                 ax.plot(dist, self.sem_norm, color='tab:blue', lw=2)
                 ax.set_ylabel("SEM norm", color='tab:blue', fontweight='bold')
-            elif key == 'i':  # <--- AÑADE ESTE BLOQUE
+            elif key == 'i':
                 ax.plot(dist, self.i, color='tab:purple', lw=2)
                 ax.set_ylabel("I [nA]", color='tab:purple', fontweight='bold')
                 ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
@@ -116,6 +125,11 @@ class ProfilePlotWindow(QMainWindow):
                 ax.plot(dist, self.deriv, color='tab:green', lw=2)
                 ax.set_ylabel(f"d ln(I)/dx [1/{unit_label}]", color='tab:green', fontweight='bold')
                 ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
+            elif key == 'vc': # <--- NUEVA LÓGICA PARA VOLTAJE
+                if self.vc is not None:
+                    ax.plot(dist, self.vc, color='tab:cyan', lw=2)
+                    ax.set_ylabel("Voltage [V]", color='tab:cyan', fontweight='bold')
+                    ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
                 
             ax.grid(True, linestyle='--', alpha=0.5)
             ax.spines['top'].set_visible(False)
@@ -135,9 +149,9 @@ class ProfilePlotWindow(QMainWindow):
     def save_csv(self):
         path, _ = QFileDialog.getSaveFileName(self, "Save CSV", f"Perpendicular_{self.windowTitle().split()[1]}.csv", "CSV (*.csv)")
         if path:
-            # Actualizamos el encabezado y los datos para incluir I_raw
-            header = "Distance,SEM_norm,I_raw,abs_I,ln_abs_I,deriv_ln_I"
-            data = np.column_stack([self.dist, self.sem_norm, self.i, self.abs_i, self.ln_i, self.deriv])
+            header = "Distance,SEM_norm,I_raw,abs_I,ln_abs_I,deriv_ln_I,Voltage"
+            vc_data = self.vc if self.vc is not None else np.full_like(self.dist, np.nan)
+            data = np.column_stack([self.dist, self.sem_norm, self.i, self.abs_i, self.ln_i, self.deriv, vc_data])
             np.savetxt(path, data, delimiter=',', header=header, comments='', fmt='%.6e')
     
     def _find_ln_i_axis(self, selected_keys):
