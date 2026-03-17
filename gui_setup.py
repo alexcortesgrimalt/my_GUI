@@ -795,7 +795,10 @@ class CorrelationGui(QMainWindow):
         except Exception as e: print(e)
 
     def show_placeholder(self):
-        self.ax.clear()
+
+        self.fig.clear()
+        self.ax = self.fig.add_subplot(111)
+        
         self.ax.axis('off') 
         
         instructions_text = (
@@ -886,7 +889,7 @@ class CorrelationGui(QMainWindow):
         else:
             self.show_placeholder()
             self.status_bar.showMessage("Error: Failed to load image.", 5000)
-            
+
     # ==========================================================
     # --- CORRELATE MAPS LOGIC ---
     # ==========================================================
@@ -1112,6 +1115,11 @@ class CorrelationGui(QMainWindow):
             except: pass
             self.cbar = None
 
+        if getattr(self, 'cbar_voltage', None):
+            try: self.cbar_voltage.remove()
+            except: pass
+            self.cbar_voltage = None
+
         self.stored_lines = []
         self.current_line_artist = None
         if self.junction_line_artist:
@@ -1189,7 +1197,9 @@ class CorrelationGui(QMainWindow):
         self.show_placeholder()
 
     def initialize_plot(self):
-        self.ax.clear()
+        self.fig.clear()  # Destruye todo rastro de ejes y barras de color viejas
+        self.ax = self.fig.add_subplot(111)
+       
         self.ax.axis('on')
         
         self.frames_list = []
