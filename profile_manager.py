@@ -33,22 +33,16 @@ def gradient_with_window(x, y, window=9):
     return dy
 
 class ProfilePlotWindow(QMainWindow):
-    """Ventana individual para mostrar los gráficos de una perpendicular."""
-    # OJO: Se ha añadido el parámetro 'vc'
     def __init__(self, prof_idx, dist, sem, ebic, vc, selected_keys, unit_label="\u03BCm"):
         super().__init__()
         self.setWindowTitle(f"Perpendicular {prof_idx} Data")
         self.resize(700, 200 * len(selected_keys) + 100)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         
-        # Crear los subplots dinámicamente según las selecciones
         self.fig, self.axes = plt.subplots(len(selected_keys), 1, sharex=True)
         self.canvas = FigureCanvas(self.fig)
-        
-        # 1. El lienzo (canvas) es el widget central
         self.setCentralWidget(self.canvas)
 
-        # 2. La barra interactiva de Matplotlib es un QToolBar, la añadimos nativamente
         self.toolbar = NavigationToolbar2QT(self.canvas, self)
         self.addToolBar(self.toolbar)
         
@@ -92,6 +86,39 @@ class ProfilePlotWindow(QMainWindow):
         self.i = ebic
         self.abs_i = np.abs(ebic)
         self.vc = vc # <--- GUARDAMOS LOS DATOS DE VOLTAJE AQUÍ
+
+        # --- CÁLCULO DE RESISTIVIDAD PUNTO A PUNTO ---
+        # 1. Suavizado y logaritmo para la corriente
+        pos = self.abs_i[self.abs_i > 0]
+        floor = max(np.min(pos) * 0.1, 1e-12) if pos.size > 0 else 1e-12
+        self.ln_i = np.log(np.maximum(self.abs_i, floor))
+        
+        # 2. Derivada de ln(I) (ya lo tenías)
+        if len(dist) > 1: self.deriv = gradient_with_window(dist, self.ln_i, window=9)
+        else: self.deriv = np.zeros_like(self.ln_i)
+
+        if self.vc is not None:
+            # Convertimos I(nA) a Amperios. Usamos un límite inferior (1 fA) para evitar dividir por 0
+            i_amp = np.maximum(self.abs_i, 1e-6) * 1e-9  
+            # R = |V| / |I| (en Ohmios)
+            self.resistance = np.abs(self.vc) / i_amp
+        else:
+            self.resistance = np.zeros_like(self.dist)
+            
+        # 3. Derivada del Voltaje y Resistividad Local
+        if len(dist) > 1 and self.vc is not None:
+            # Factor de escala temporal para derivadas espaciales (asumiendo dist en µm)
+            factor_cm = 1e-4 if unit_label == "\u03BCm" else 1e-7 if unit_label == "nm" else 1e-1
+            dist_cm = self.dist * factor_cm 
+            
+            self.deriv_vc = gradient_with_window(dist_cm, self.vc, window=9)
+            
+            # Conversiones físicas
+            # Prevención de divisiones por cero (limitamos corriente mínima a 1 fA para el cálculo)
+            i_amp = np.maximum(self.abs_i, 1e-6) * 1e-9  
+        else:
+            self.deriv_vc = np.zeros_like(self.dist)
+            self.resistivity = np.zeros_like(self.dist)
         
         # Storage for fit results
         self.properties = None
@@ -130,6 +157,15 @@ class ProfilePlotWindow(QMainWindow):
                     ax.plot(dist, self.vc, color='tab:cyan', lw=2)
                     ax.set_ylabel("Voltage [V]", color='tab:cyan', fontweight='bold')
                     ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
+            elif key == 'deriv_vc':
+                if self.vc is not None:
+                    ax.plot(dist, self.deriv_vc, color='tab:pink', lw=2)
+                    ax.set_ylabel("dV/dx [V/cm]", color='tab:pink', fontweight='bold')
+                    ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
+            # --------------------
+            elif key == 'r': 
+                ax.plot(dist, self.resistance, color='tab:brown', lw=2)
+                ax.set_ylabel(r"Resistance [$\Omega$]", color='tab:brown', fontweight='bold')
                 
             ax.grid(True, linestyle='--', alpha=0.5)
             ax.spines['top'].set_visible(False)
@@ -146,14 +182,20 @@ class ProfilePlotWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "Save Plot", f"Perpendicular_{self.windowTitle().split()[1]}.png", "PNG (*.png)")
         if path: self.fig.savefig(path, dpi=300, bbox_inches='tight')
         
+    
     def save_csv(self):
         path, _ = QFileDialog.getSaveFileName(self, "Save CSV", f"Perpendicular_{self.windowTitle().split()[1]}.csv", "CSV (*.csv)")
         if path:
-            header = "Distance,SEM_norm,I_raw,abs_I,ln_abs_I,deriv_ln_I,Voltage"
+            # --- HEADER MODIFICADO ---
+            header = "Distance,SEM_norm,I_raw,abs_I,ln_abs_I,deriv_ln_I,Voltage_V,dV_dx_V_cm,Resistance_Ohm"
             vc_data = self.vc if self.vc is not None else np.full_like(self.dist, np.nan)
-            data = np.column_stack([self.dist, self.sem_norm, self.i, self.abs_i, self.ln_i, self.deriv, vc_data])
+            deriv_vc_data = self.deriv_vc if hasattr(self, 'deriv_vc') else np.full_like(self.dist, np.nan)
+            
+            # --- DATA STACK MODIFICADO ---
+            data = np.column_stack([self.dist, self.sem_norm, self.i, self.abs_i, 
+                                    self.ln_i, self.deriv, vc_data, deriv_vc_data, self.resistance])
             np.savetxt(path, data, delimiter=',', header=header, comments='', fmt='%.6e')
-    
+
     def _find_ln_i_axis(self, selected_keys):
         """Find and store the axis that displays ln(I) for fit plotting."""
         self.ln_i_axis = None

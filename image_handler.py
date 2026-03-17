@@ -67,8 +67,16 @@ class SEMDataManager:
         scale = 1  # mV
         offset = -0.5  # mV
         
+        if pixels.dtype.kind in 'ui': # Si son enteros sin signo (uint8, uint16)
+            bit_depth_max = float(np.iinfo(pixels.dtype).max)
+        else:
+            bit_depth_max = 65535.0 # Fallback por si acaso
+            
+        # Normalizar voltaje usando el límite real de tu imagen
+        voltage = (pixels / bit_depth_max) * scale + offset
+
         # Normalizar voltaje (16-bits)
-        voltage = (pixels / 65535.0) * scale + offset
+        #voltage = (pixels / 65535.0) * scale + offset
 
         # Calcular corriente
         if inv:
@@ -87,7 +95,13 @@ class SEMDataManager:
         
         # Normalizamos usando la escala máxima del digitalizador (16-bits = 65535) 
         # para mantener coherencia con la conversión de corriente
-        sem_norm = self.sem_data / 65535.0
+
+        if self.sem_data.dtype.kind in 'ui':
+            bit_depth_max = float(np.iinfo(self.sem_data.dtype).max)
+        else:
+            bit_depth_max = 65535.0
+            
+        sem_norm = self.sem_data / bit_depth_max
         
         # Cálculo físico: Escala aplicada al porcentaje de señal + Offsets
-        self.voltage_map = (sem_norm * V_contrast) + V_offset # + V_bias
+        self.voltage_map = (sem_norm * V_contrast) + V_offset + V_bias

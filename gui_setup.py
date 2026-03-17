@@ -12,6 +12,8 @@ from matplotlib.lines import Line2D
 import matplotlib.image as mpimg 
 import numpy as np
 import scipy.ndimage as ndi
+import os
+import glob
 
 # Import the data manager and analyzers
 from image_handler import SEMDataManager
@@ -37,6 +39,11 @@ class CorrelationGui(QMainWindow):
         # --- VISUAL STATE ---
         self.img_width = 0
         self.img_height = 0
+
+        # --- FOLDER NAVIGATION ---
+        self.current_folder = ""
+        self.folder_files = []
+        self.current_file_index = -1
         
         # Dynamic physical variables
         self.pixel_size_phys = 1.0
@@ -344,6 +351,18 @@ class CorrelationGui(QMainWindow):
         upload_action.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_DialogOpenButton))
         upload_action.triggered.connect(self.upload_image)
         toolbar.addAction(upload_action)
+
+        self.action_prev_file = QAction("⏮ Prev File", self)
+        self.action_prev_file.triggered.connect(lambda: self.navigate_folder(-1))
+        self.action_prev_file.setEnabled(False)
+        toolbar.addAction(self.action_prev_file)
+
+        self.action_next_file = QAction("Next File ⏭", self)
+        self.action_next_file.triggered.connect(lambda: self.navigate_folder(1))
+        self.action_next_file.setEnabled(False)
+        toolbar.addAction(self.action_next_file)
+        
+        toolbar.addSeparator() # Un separador visual
 
         correlate_action = QAction("Correlate Maps (M1 ± M2)", self)
         correlate_action.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_FileDialogDetailedView))
@@ -803,29 +822,71 @@ class CorrelationGui(QMainWindow):
         
         self.canvas.draw()
 
-    # --- LOAD LOGIC ---
-    # --- LOAD LOGIC ---
+    # ==========================================================
+    # --- LOAD & FOLDER NAVIGATION LOGIC ---
+    # ==========================================================
     def upload_image(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Load TIF", "", "TIF Files (*.tif *.tiff)")
+        file_path, _ = QFileDialog.getOpenFileName(self, "Load TIF", self.current_folder, "TIF Files (*.tif *.tiff)")
         if file_path:
-            self.reset_entire_state()
-            success = self.data_manager.load_file(file_path)
-            if success:
-                # --- NUEVO: Protección contra imágenes RGB (3D) ---
-                if self.data_manager.sem_data.ndim == 3:
-                    # Nos quedamos solo con el primer canal de color (índice 0)
-                    self.data_manager.sem_data = self.data_manager.sem_data[:, :, 0]
+            # 1. Actualizar la lista de archivos de la carpeta
+            self.current_folder = os.path.dirname(file_path)
+            search_pattern = os.path.join(self.current_folder, "*.[tT][iI][fF]*")
+            # Ordenar alfabéticamente para que la navegación tenga sentido
+            self.folder_files = sorted([f for f in glob.glob(search_pattern) if f.lower().endswith(('.tif', '.tiff'))])
+            
+            # 2. Encontrar el índice del archivo seleccionado
+            try:
+                self.current_file_index = self.folder_files.index(os.path.normpath(file_path))
+            except ValueError:
+                self.current_file_index = -1
                 
-                # Aplicamos la misma protección al mapa EBIC por si acaso
-                if self.data_manager.current_map is not None and self.data_manager.current_map.ndim == 3:
-                    self.data_manager.current_map = self.data_manager.current_map[:, :, 0]
-                # --------------------------------------------------
+            # 3. Cargar el archivo
+            self._load_specific_file(file_path)
 
-                self.img_height, self.img_width = self.data_manager.sem_data.shape
-                self.initialize_plot()
-            else:
-                self.show_placeholder()
+    def navigate_folder(self, direction):
+        """Avanza o retrocede en la lista de archivos de la carpeta actual."""
+        if not self.folder_files: return
+        
+        new_idx = self.current_file_index + direction
+        
+        # Comprobar límites para no salirnos de la lista
+        if 0 <= new_idx < len(self.folder_files):
+            self.current_file_index = new_idx
+            next_file = self.folder_files[self.current_file_index]
+            self._load_specific_file(next_file)
 
+    def _load_specific_file(self, file_path):
+        """Lógica interna para cargar un TIF y actualizar la interfaz."""
+        self.reset_entire_state()
+        success = self.data_manager.load_file(file_path)
+        
+        if success:
+            # --- Protección contra imágenes RGB (3D) ---
+            if self.data_manager.sem_data.ndim == 3:
+                self.data_manager.sem_data = self.data_manager.sem_data[:, :, 0]
+            
+            if self.data_manager.current_map is not None and self.data_manager.current_map.ndim == 3:
+                self.data_manager.current_map = self.data_manager.current_map[:, :, 0]
+            # --------------------------------------------------
+
+            self.img_height, self.img_width = self.data_manager.sem_data.shape
+            
+            # Extraer solo el nombre del archivo para los títulos de los gráficos
+            self.current_filename = os.path.basename(file_path)
+            
+            self.initialize_plot()
+            
+            # Actualizar estado de los botones de navegación
+            total_files = len(self.folder_files)
+            self.action_prev_file.setEnabled(self.current_file_index > 0)
+            self.action_next_file.setEnabled(self.current_file_index < total_files - 1)
+            
+            msg = f"Loaded: {self.current_filename} ({self.current_file_index + 1}/{total_files} in folder)"
+            self.status_bar.showMessage(msg, 5000)
+        else:
+            self.show_placeholder()
+            self.status_bar.showMessage("Error: Failed to load image.", 5000)
+            
     # ==========================================================
     # --- CORRELATE MAPS LOGIC ---
     # ==========================================================
@@ -1408,17 +1469,29 @@ class CorrelationGui(QMainWindow):
             cb_deriv = QCheckBox("d) d ln(abs(I)) / dx")
             cb_vc = QCheckBox("e) Voltage Contrast") # <--- AÑADIDO
             
+            cb_sem = QCheckBox("a) SEM norm")
+            cb_abs = QCheckBox("b) abs(I)")
+            cb_ln = QCheckBox("c) ln abs(I)")
+            cb_deriv = QCheckBox("d) d ln(abs(I)) / dx")
+            cb_vc = QCheckBox("e) Voltage Contrast")
+            cb_deriv_vc = QCheckBox("f) dV/dx (Electric Field)") # <--- AÑADIDO
+            cb_r = QCheckBox("g) Resistance (V/I)")              # <--- AÑADIDO (Ya que lo tienes en la clase Profile)
+            
             cb_sem.setChecked(True)
             cb_abs.setChecked(True)
             cb_ln.setChecked(True)
             cb_deriv.setChecked(True)
-            cb_vc.setChecked(False) # <--- AÑADIDO (Desmarcado por defecto o True, como prefieras)
+            cb_vc.setChecked(False)
+            cb_deriv_vc.setChecked(False) # <--- AÑADIDO
+            cb_r.setChecked(False)        # <--- AÑADIDO
             
             vbox.addWidget(cb_sem)
             vbox.addWidget(cb_abs)
             vbox.addWidget(cb_ln)
             vbox.addWidget(cb_deriv)
-            vbox.addWidget(cb_vc) # <--- AÑADIDO
+            vbox.addWidget(cb_vc)
+            vbox.addWidget(cb_deriv_vc)   # <--- AÑADIDO
+            vbox.addWidget(cb_r)          # <--- AÑADIDO
             
             self.scroll_layout.addWidget(gb)
             
@@ -1428,7 +1501,9 @@ class CorrelationGui(QMainWindow):
                 'abs_i': cb_abs,
                 'ln_i': cb_ln,
                 'deriv': cb_deriv,
-                'vc': cb_vc # <--- AÑADIDO AL DICCIONARIO
+                'vc': cb_vc,
+                'deriv_vc': cb_deriv_vc,  # <--- AÑADIDO
+                'r': cb_r                 # <--- AÑADIDO
             }
 
     def extract_profiles_data(self):
@@ -1458,6 +1533,8 @@ class CorrelationGui(QMainWindow):
             if ui_elements['ln_i'].isChecked(): selected_keys.append('ln_i')
             if ui_elements['deriv'].isChecked(): selected_keys.append('deriv')
             if ui_elements['vc'].isChecked(): selected_keys.append('vc')
+            if ui_elements.get('deriv_vc') and ui_elements['deriv_vc'].isChecked(): selected_keys.append('deriv_vc') # <--- AÑADIDO
+            if ui_elements.get('r') and ui_elements['r'].isChecked(): selected_keys.append('r') # <--- AÑADIDO
             
             if not selected_keys: 
                 continue
@@ -1480,6 +1557,11 @@ class CorrelationGui(QMainWindow):
                 ebic_data = self.data_manager.current_map.astype(float)
             else:
                 ebic_data = np.zeros_like(sem_data)
+
+            if getattr(self.data_manager, 'voltage_map', None) is not None:
+                vc_data = self.data_manager.voltage_map.astype(float)
+            else:
+                vc_data = np.zeros_like(sem_data)
                 
             sem_prof = ndi.map_coordinates(sem_data, [r_vals, c_vals], order=1, mode='nearest')
             ebic_prof = ndi.map_coordinates(ebic_data, [r_vals, c_vals], order=1, mode='nearest')
@@ -1707,6 +1789,8 @@ class CorrelationGui(QMainWindow):
         sem_data = self.data_manager.sem_data.astype(float)
         ebic_data = self.data_manager.current_map.astype(float) if self.data_manager.current_map is not None else np.zeros_like(sem_data)
         vc_data = self.data_manager.voltage_map.astype(float) if getattr(self.data_manager, 'voltage_map', None) is not None else np.zeros_like(sem_data)
+        
+
 
         # Preparamos la cadena de parámetros para presentar todas las variables en juego
         # Preparamos la cadena de parámetros para presentar todas las variables en juego
@@ -1728,11 +1812,13 @@ class CorrelationGui(QMainWindow):
             
             sem_prof = ndi.map_coordinates(sem_data, [r_vals, c_vals], order=1, mode='nearest')
             ebic_prof = ndi.map_coordinates(ebic_data, [r_vals, c_vals], order=1, mode='nearest')
-            vc_prof = ndi.map_coordinates(vc_data, [r_vals, c_vals], order=1, mode='nearest')
+            vc_prof = ndi.map_coordinates(vc_data, [r_vals, c_vals], order=1, mode='nearest') 
             
             dist_um = np.linspace(0, np.hypot(ex - sx, ey - sy), N)
+            
             win_title = f"NW_{idx+1}{param_str}"
-            win = ProfilePlotWindow(win_title, dist_um, sem_prof, ebic_prof, vc_prof, ['i', 'vc'], self.unit_label)
+            # Añadimos 'deriv_vc' a la lista para mostrar el gradiente de potencial
+            win = ProfilePlotWindow(win_title, dist_um, sem_prof, ebic_prof, vc_prof, ['i', 'vc', 'deriv_vc', 'r'], self.unit_label)
             win.show()
             self.plot_windows.append(win)
 
