@@ -1,0 +1,6 @@
+PyQt6
+matplotlib
+numpy
+scipy
+Pillow
+opencv-python

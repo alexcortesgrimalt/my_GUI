@@ -86,6 +86,21 @@ class ProfilePlotWindow(QMainWindow):
         self.i = ebic
         self.abs_i = np.abs(ebic)
         self.vc = vc # <--- GUARDAMOS LOS DATOS DE VOLTAJE AQUÍ
+        
+        if unit_label == "\u03BCm":
+            dist_um_array = self.dist
+        elif unit_label == "nm":
+            dist_um_array = self.dist * 1e-3
+        elif unit_label == "mm":
+            dist_um_array = self.dist * 1e3
+        else:
+            dist_um_array = self.dist
+
+
+        if len(self.dist) > 1:
+            self.deriv_i = gradient_with_window(dist_um_array, ebic, window=9)
+        else:
+            self.deriv_i = np.zeros_like(self.dist)
 
         # --- CÁLCULO DE RESISTIVIDAD PUNTO A PUNTO ---
         # 1. Suavizado y logaritmo para la corriente
@@ -166,6 +181,12 @@ class ProfilePlotWindow(QMainWindow):
             elif key == 'r': 
                 ax.plot(dist, self.resistance, color='tab:brown', lw=2)
                 ax.set_ylabel(r"Resistance [$\Omega$]", color='tab:brown', fontweight='bold')
+            elif key == 'deriv_i':
+                ax.plot(dist, self.deriv_i, color='tab:orange', lw=1.5)
+                ax.set_ylabel("dI/dx [nA/\u03BCm]", color='tab:orange', fontweight='bold')
+                ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
+                
+            # Por si quieres exportarla, asegúrate de que esté en tu bloque de 'save_csv'
                 
             ax.grid(True, linestyle='--', alpha=0.5)
             ax.spines['top'].set_visible(False)

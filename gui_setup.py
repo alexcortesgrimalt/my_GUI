@@ -178,6 +178,20 @@ class CorrelationGui(QMainWindow):
                                                   color='red', linewidth=2)
                 self.ax.add_line(self.current_line_artist)
                 self.canvas.draw()
+            elif self.mode == 'manual_nw':
+                if not event.xdata or not event.ydata: return
+                
+                self.manual_nw_points.append((event.xdata, event.ydata))
+                
+                # Dibujar un punto temporal rojo donde hicimos clic
+                dot, = self.ax.plot(event.xdata, event.ydata, 'ro', markersize=4)
+                self.temp_manual_dots.append(dot)
+                self.canvas.draw_idle()
+
+                if len(self.manual_nw_points) == 1:
+                    self.status_bar.showMessage("Manual NW: Click on the END point of the Nanowire.", 10000)
+                elif len(self.manual_nw_points) == 2:
+                    self._create_manual_nw() # Completa la creación del NW con los 2 puntos seleccionados
         except: pass
 
     def on_mouse_move(self, event):
@@ -755,8 +769,62 @@ class CorrelationGui(QMainWindow):
         self.btn_detect_nws.setStyleSheet("QPushButton { font-weight: bold; background-color: #ffeeba; padding: 6px; }")
         self.btn_detect_nws.clicked.connect(self.action_detect_nws)
         nws_layout.addWidget(self.btn_detect_nws)
+
+        self.btn_manual_nw = QPushButton("Detect 1 NW Manually (2 Clicks)")
+        self.btn_manual_nw.setStyleSheet("QPushButton { font-weight: bold; background-color: #cce5ff; padding: 6px; }")
+        self.btn_manual_nw.clicked.connect(self.action_manual_nw)
+        nws_layout.addWidget(self.btn_manual_nw)
         
         nws_layout.addSpacing(15)
+
+        # =========================================================
+        # --- NUEVO: CHECKBOXES PARA SELECCIONAR SALIDAS EN NWs ---
+        # =========================================================
+        lbl_nw_outs = QLabel("3. Select outputs per NW:")
+        lbl_nw_outs.setStyleSheet("font-weight: bold;")
+        nws_layout.addWidget(lbl_nw_outs)
+
+        # Layout horizontal para dividir en dos columnas
+        h_nw_layout = QHBoxLayout()
+        
+        col1_nw = QVBoxLayout()
+        self.chk_nw_sem = QCheckBox("SEM norm")
+        self.chk_nw_i = QCheckBox("Current (I)")
+        self.chk_nw_deriv_i = QCheckBox("dI / dx") # <--- NUEVA SALIDA
+        self.chk_nw_r = QCheckBox("Resistance (R)")
+        col1_nw.addWidget(self.chk_nw_sem)
+        col1_nw.addWidget(self.chk_nw_i)
+        col1_nw.addWidget(self.chk_nw_deriv_i)
+        col1_nw.addWidget(self.chk_nw_r)
+
+        col2_nw = QVBoxLayout()
+        self.chk_nw_vc = QCheckBox("Voltage (V)")
+        self.chk_nw_deriv_vc = QCheckBox("dV / dx")
+        self.chk_nw_abs_i = QCheckBox("abs(I)")
+        self.chk_nw_deriv = QCheckBox("d ln(I)/dx")
+        col2_nw.addWidget(self.chk_nw_vc)
+        col2_nw.addWidget(self.chk_nw_deriv_vc)
+        col2_nw.addWidget(self.chk_nw_abs_i)
+        col2_nw.addWidget(self.chk_nw_deriv)
+
+        h_nw_layout.addLayout(col1_nw)
+        h_nw_layout.addLayout(col2_nw)
+        nws_layout.addLayout(h_nw_layout)
+
+        # Selecciones por defecto (igual que antes)
+        self.chk_nw_sem.setChecked(False)
+        self.chk_nw_i.setChecked(True)
+        self.chk_nw_deriv_i.setChecked(False) 
+        self.chk_nw_r.setChecked(True)
+        self.chk_nw_vc.setChecked(True)
+        self.chk_nw_deriv_vc.setChecked(True)
+        self.chk_nw_abs_i.setChecked(False)
+        self.chk_nw_deriv.setChecked(False)
+        # =========================================================
+
+        nws_layout.addSpacing(10)
+
+        # --- CONTINÚA CON EL BOTÓN EXISTENTE ---
         self.btn_extract_nws = QPushButton("Extract Current Profiles (1D)")
         self.btn_extract_nws.setStyleSheet("QPushButton { font-weight: bold; background-color: #d1e7dd; padding: 6px; }")
         self.btn_extract_nws.clicked.connect(self.action_extract_nws_profiles)
@@ -1199,6 +1267,8 @@ class CorrelationGui(QMainWindow):
     def initialize_plot(self):
         self.fig.clear()  # Destruye todo rastro de ejes y barras de color viejas
         self.ax = self.fig.add_subplot(111)
+
+        self.profile_manager = ProfileManager(self.ax, self.canvas)
        
         self.ax.axis('on')
         
@@ -1516,6 +1586,9 @@ class CorrelationGui(QMainWindow):
                 'r': cb_r                 # <--- AÑADIDO
             }
 
+            self.canvas.draw_idle()
+            
+
     def extract_profiles_data(self):
         if not self.profile_manager.profiles:
             QMessageBox.warning(self, "Error", "No profiles generated yet.")
@@ -1680,6 +1753,32 @@ class CorrelationGui(QMainWindow):
     # ==========================================================
     # --- NANOWIRES DETECTION LOGIC ---
     # ==========================================================
+
+    def set_mode(self, mode):
+        try:
+            # Limpieza de puntos temporales si abortas la creación manual
+            if hasattr(self, 'temp_manual_dots'):
+                for dot in self.temp_manual_dots:
+                    try: dot.remove()
+                    except: pass
+                self.temp_manual_dots.clear()
+            self.manual_nw_points = []
+
+            if self.mode == mode:
+                self.mode = "view"
+                self.tool_group.setExclusive(False)
+                self.btn_pan.setChecked(False)
+                self.btn_line.setChecked(False)
+                self.tool_group.setExclusive(True)
+                self.canvas.setCursor(Qt.CursorShape.ArrowCursor)
+            else:
+                self.mode = mode
+                if mode == 'pan': self.canvas.setCursor(Qt.CursorShape.OpenHandCursor)
+                elif mode == 'line': self.canvas.setCursor(Qt.CursorShape.CrossCursor)
+                # --- NUEVO MODO ---
+                elif mode == 'manual_nw': self.canvas.setCursor(Qt.CursorShape.CrossCursor)
+        except Exception as e: print(e)
+
     def action_detect_nws(self):
         if self.data_manager.current_map is None:
             QMessageBox.warning(self, "Error", "An EBIC map is required for NW detection.")
@@ -1781,9 +1880,75 @@ class CorrelationGui(QMainWindow):
         else:
             self.status_bar.showMessage(f"Detected {len(nw_lines_px)} Nanowires. Drag cyan arrow ends to modify length.", 5000)
 
+    def action_manual_nw(self):
+        """Activa el modo para dibujar un NW haciendo 2 clics."""
+        if self.data_manager.current_map is None:
+            QMessageBox.warning(self, "Error", "An EBIC map is required to extract data.")
+            return
+            
+        self.set_mode("manual_nw")
+        self.manual_nw_points = []
+        self.temp_manual_dots = []
+        self.status_bar.showMessage("Manual NW: Click on the START point of the Nanowire.", 10000)
+
+    def _create_manual_nw(self):
+        """Dibuja el NW y lo añade a la base de datos tras el segundo clic."""
+        # 1. Limpiar los puntos temporales rojos
+        for dot in self.temp_manual_dots:
+            try: dot.remove()
+            except: pass
+        self.temp_manual_dots.clear()
+
+        # 2. Extraer coordenadas físicas
+        sx, sy = self.manual_nw_points[0]
+        ex, ey = self.manual_nw_points[1]
+        
+        # 3. Registrar el índice para nombrar el NW (NW1, NW2...)
+        i = len(self.detected_nws_data)
+
+        # 4. Dibujar la flecha Cyan
+        arrow = self.ax.annotate(
+            '', 
+            xy=(ex, ey),       # Punta de la flecha (End)
+            xytext=(sx, sy),   # Base de la flecha (Start)
+            annotation_clip=False, 
+            arrowprops=dict(arrowstyle="->", color="cyan", lw=2, mutation_scale=15)
+        )
+        self.nw_artists.append(arrow)
+        self.nw_arrows.append(arrow)
+        
+        # 5. Añadir la etiqueta de texto
+        txt = self.ax.text(sx, sy, f" NW{i+1}", color='white', 
+                           fontsize=10, fontweight='bold', ha='right', va='bottom',
+                           clip_on=False) 
+        self.nw_artists.append(txt)
+        self.nw_texts.append(txt)
+        
+        # 6. Guardar en la estructura de datos que usa 'Extract Current Profiles'
+        self.detected_nws_data.append(((sx, sy), (ex, ey)))
+
+        # 7. Restaurar estado visual
+        self.set_mode("view")
+        self.canvas.draw_idle()
+        self.status_bar.showMessage(f"Manual NW {i+1} added. You can extract data or drag its ends to adjust.", 6000)
+
     def action_extract_nws_profiles(self):
         if not self.detected_nws_data:
             QMessageBox.warning(self, "Error", "No NWs detected yet. Click 'Detect NWs' first.")
+            return
+        
+        selected_keys = []
+        if self.chk_nw_sem.isChecked(): selected_keys.append('sem')
+        if self.chk_nw_i.isChecked(): selected_keys.append('i')
+        if self.chk_nw_abs_i.isChecked(): selected_keys.append('abs_i')
+        if self.chk_nw_deriv.isChecked(): selected_keys.append('deriv')
+        if self.chk_nw_deriv_i.isChecked(): selected_keys.append('deriv_i') # La nueva clave
+        if self.chk_nw_vc.isChecked(): selected_keys.append('vc')
+        if self.chk_nw_deriv_vc.isChecked(): selected_keys.append('deriv_vc')
+        if self.chk_nw_r.isChecked(): selected_keys.append('r')
+
+        if not selected_keys:
+            QMessageBox.warning(self, "Warning", "Please select at least one output to plot.")
             return
 
         # Limpieza segura de ventanas fantasma
@@ -1828,7 +1993,7 @@ class CorrelationGui(QMainWindow):
             
             win_title = f"NW_{idx+1}{param_str}"
             # Añadimos 'deriv_vc' a la lista para mostrar el gradiente de potencial
-            win = ProfilePlotWindow(win_title, dist_um, sem_prof, ebic_prof, vc_prof, ['i', 'vc', 'deriv_vc', 'r'], self.unit_label)
+            win = ProfilePlotWindow(win_title, dist_um, sem_prof, ebic_prof, vc_prof, selected_keys, self.unit_label)
             win.show()
             self.plot_windows.append(win)
 

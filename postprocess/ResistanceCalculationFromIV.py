@@ -85,7 +85,7 @@ def analyze_iv_curve(csv_filepath):
     # Línea del ajuste
     fit_I = (slope * V + intercept) * 1e6 # Pasado a microAmperios para la gráfica
     ax.plot(V, fit_I, color='red', linestyle='--', linewidth=2, 
-            label=f'Linear Fit (R² = {r_value**2:.4f})')
+            label=f'Linear Fit')
 
     # Configuración de los ejes
     ax.set_xlabel('Voltage (V)', fontsize=12, fontweight='bold')
@@ -101,9 +101,6 @@ def analyze_iv_curve(csv_filepath):
     info_text = (
         f"◆ Calculated Resistance: {res_str}\n"
         f"◆ Fit Equation: I = V/{res_str} + {intercept*1e6:.2f} μA\n"
-        f"◆ Sweep: {metadata.get('Start V', 'N/A')}V to {metadata.get('Stop V', 'N/A')}V\n"
-        f"◆ Compliance: {metadata.get('Compliance (A)', 'N/A')} A\n"
-        f"◆ Date: {metadata.get('Date', 'N/A')}"
     )
     
     props = dict(boxstyle='round,pad=0.5', facecolor='#f8f9fa', alpha=0.9, edgecolor='#cccccc')
@@ -128,6 +125,6 @@ def analyze_iv_curve(csv_filepath):
 # Reemplaza 'tus_datos.csv' con el nombre de tu archivo
 # ==========================================
 if __name__ == "__main__":
-    csv_file = "IV_Curve_4H_3L.csv" 
+    csv_file = "IV_Curve_afterall.csv" 
     R, meta = analyze_iv_curve(csv_file)
     pass
