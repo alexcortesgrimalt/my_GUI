@@ -35,6 +35,24 @@ def gradient_with_window(x, y, window=9):
 class ProfilePlotWindow(QMainWindow):
     def __init__(self, prof_idx, dist, sem, ebic, vc, selected_keys, unit_label="\u03BCm"):
         super().__init__()
+        
+        # --- NUEVO: ESTILO CIENTÍFICO / LATEX ---
+        plt.rcParams.update({
+            "font.family": "serif",
+            "font.serif": ["Computer Modern Roman", "Times New Roman", "serif"],
+            "mathtext.fontset": "cm",      # Usa fuente tipo LaTeX para las matemáticas
+            "axes.formatter.use_mathtext": True,
+            "axes.linewidth": 0.8,         # Bordes de los gráficos más finos
+            "xtick.major.width": 0.8,
+            "ytick.major.width": 0.8,
+            "xtick.direction": "in",       # Ticks hacia adentro (estilo clásico paper)
+            "ytick.direction": "in",
+            "font.size": 11,               # Tamaño base de la fuente
+            "axes.titlesize": 12,
+            "axes.labelsize": 11
+        })
+        # ----------------------------------------
+
         self.setWindowTitle(f"Perpendicular {prof_idx} Data")
         self.resize(700, 200 * len(selected_keys) + 100)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -151,49 +169,47 @@ class ProfilePlotWindow(QMainWindow):
         for idx, key in enumerate(selected_keys):
             ax = ax_list[idx]
             if key == 'sem':
-                ax.plot(dist, self.sem_norm, color='tab:blue', lw=2)
-                ax.set_ylabel("SEM norm", color='tab:blue', fontweight='bold')
+                ax.plot(dist, self.sem_norm, color='#1f77b4', lw=1)
+                ax.set_ylabel(r"SEM norm", color='#1f77b4')
             elif key == 'i':
-                ax.plot(dist, self.i, color='tab:purple', lw=2)
-                ax.set_ylabel("I [nA]", color='tab:purple', fontweight='bold')
-                ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
+                ax.plot(dist, self.i, color='#9467bd', lw=1)
+                ax.set_ylabel(r"$I$ [nA]", color='#9467bd')
+                ax.axhline(0, color='gray', linestyle=':', lw=0.8, alpha=0.7)
             elif key == 'abs_i':
-                ax.plot(dist, self.abs_i, color='tab:red', lw=2)
-                ax.set_ylabel("abs(I) [nA]", color='tab:red', fontweight='bold')
+                ax.plot(dist, self.abs_i, color='#d62728', lw=1)
+                ax.set_ylabel(r"$|I|$ [nA]", color='#d62728')
             elif key == 'ln_i':
-                ax.plot(dist, self.ln_i, color='tab:orange', lw=2)
-                ax.set_ylabel("ln abs(I)", color='tab:orange', fontweight='bold')
+                ax.plot(dist, self.ln_i, color='#ff7f0e', lw=1)
+                ax.set_ylabel(r"$\ln |I|$", color='#ff7f0e')
             elif key == 'deriv':
-                ax.plot(dist, self.deriv, color='tab:green', lw=2)
-                ax.set_ylabel(f"d ln(I)/dx [1/{unit_label}]", color='tab:green', fontweight='bold')
-                ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
-            elif key == 'vc': # <--- NUEVA LÓGICA PARA VOLTAJE
+                ax.plot(dist, self.deriv, color='#2ca02c', lw=1)
+                ax.set_ylabel(r"d$\ln(I)$/dx [1/" + unit_label + "]", color='#2ca02c')
+                ax.axhline(0, color='gray', linestyle=':', lw=0.8, alpha=0.7)
+            elif key == 'vc': 
                 if self.vc is not None:
-                    ax.plot(dist, self.vc, color='tab:cyan', lw=2)
-                    ax.set_ylabel("Voltage [V]", color='tab:cyan', fontweight='bold')
-                    ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
+                    ax.plot(dist, self.vc, color='#17becf', lw=1)
+                    ax.set_ylabel(r"Voltage [V]", color='#17becf')
+                    ax.axhline(0, color='gray', linestyle=':', lw=0.8, alpha=0.7)
             elif key == 'deriv_vc':
                 if self.vc is not None:
-                    ax.plot(dist, self.deriv_vc, color='tab:pink', lw=2)
-                    ax.set_ylabel("dV/dx [V/cm]", color='tab:pink', fontweight='bold')
-                    ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
-            # --------------------
+                    ax.plot(dist, self.deriv_vc, color='#e377c2', lw=1)
+                    ax.set_ylabel(r"d$V$/dx [V/cm]", color='#e377c2')
+                    ax.axhline(0, color='gray', linestyle=':', lw=0.8, alpha=0.7)
             elif key == 'r': 
-                ax.plot(dist, self.resistance, color='tab:brown', lw=2)
-                ax.set_ylabel(r"Resistance [$\Omega$]", color='tab:brown', fontweight='bold')
+                ax.plot(dist, self.resistance, color='#8c564b', lw=1)
+                ax.set_ylabel(r"Resistance [$\Omega$]", color='#8c564b')
             elif key == 'deriv_i':
-                ax.plot(dist, self.deriv_i, color='tab:orange', lw=1.5)
-                ax.set_ylabel("dI/dx [nA/\u03BCm]", color='tab:orange', fontweight='bold')
-                ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
+                ax.plot(dist, self.deriv_i, color='#ff7f0e', lw=1)
+                ax.set_ylabel(r"d$I$/dx [nA/" + unit_label + "]", color='#ff7f0e')
+                ax.axhline(0, color='gray', linestyle=':', lw=0.8, alpha=0.7)
                 
-            # Por si quieres exportarla, asegúrate de que esté en tu bloque de 'save_csv'
-                
-            ax.grid(True, linestyle='--', alpha=0.5)
+            # Grid más sutil, tipo paper
+            ax.grid(True, linestyle=':', linewidth=0.6, alpha=0.6)
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
             
-        ax_list[-1].set_xlabel(f"Distance ({unit_label})", fontweight='bold')
-        self.fig.suptitle(f"Profile Extraction: Perpendicular {prof_idx}", fontsize=14, fontweight='bold')
+        ax_list[-1].set_xlabel(f"Distance ({unit_label})")
+        self.fig.suptitle(f"Profile Extraction: Perpendicular {prof_idx}", fontsize=13)
         self.fig.tight_layout()
         
         # Find and store the ln_i axis for plotting fits
