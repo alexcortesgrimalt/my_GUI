@@ -520,6 +520,16 @@ class CorrelationGui(QMainWindow):
         vis_layout.addWidget(lbl_props)
         vis_layout.addSpacing(15)
 
+        # # TAB 2: FARADAY CALIBRATION
+        # self.tab_calib = QWidget()
+        # calib_layout = QVBoxLayout(self.tab_calib)
+
+        # lbl_calib = QLabel("Faraday Calibration")
+        # lbl_calib.setStyleSheet("font-weight: bold; font-size: 14px;")
+
+        # calib_layout.addWidget(lbl_calib)
+        # calib_layout.addSpacing(10)
+
         # --- NUEVO: Selector de Overlay ---
         lbl_overlay_type = QLabel("Overlay Mode:")
         self.combo_overlay = QComboBox()
