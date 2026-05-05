@@ -9,6 +9,7 @@ from PyQt6.QtCore import Qt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 import matplotlib.image as mpimg 
 import numpy as np
 import scipy.ndimage as ndi
@@ -18,7 +19,7 @@ import glob
 # Import the data manager and analyzers
 from image_handler import SEMDataManager
 from junction_analyzer import JunctionAnalyzer
-from profile_manager import ProfileManager, ProfilePlotWindow
+from profile_manager import ProfileManager, ProfilePlotWindow, EBIC3DWindow
 from detect_NWs import NWDetector
 import matplotlib.pyplot as plt
 
@@ -405,6 +406,8 @@ class CorrelationGui(QMainWindow):
         menu_screen = QMenu("Save screen as ", self)
         menu_screen.addAction(".tif", lambda: self.save_data("screen", "tif"))
         menu_screen.addAction(".png", lambda: self.save_data("screen", "png"))
+        menu_screen.addSeparator() # <--- AÑADIR
+        menu_screen.addAction("Figure for a paper (.png)", self.save_paper_figure) # <--- AÑADIR
         save_menu.addMenu(menu_screen)
         save_menu.addSeparator()
         save_menu.addAction("Save SEM map (.csv)", lambda: self.save_data("sem", "csv"))
@@ -455,6 +458,10 @@ class CorrelationGui(QMainWindow):
         self.btn_overlay.setStyleSheet("QPushButton { font-weight: bold; color: purple; }")
         self.btn_overlay.clicked.connect(self.toggle_overlay)
 
+        self.btn_3d_map = self.create_tool_button("3D", "Show 3D EBIC Map")
+        self.btn_3d_map.setStyleSheet("QPushButton { font-weight: bold; background-color: #e2e3e5; padding: 6px; margin-top: 5px; }")
+        self.btn_3d_map.clicked.connect(self.action_show_3d_ebic)
+
         self.tool_group = QButtonGroup(self)
         self.tool_group.addButton(self.btn_pan)
         self.tool_group.addButton(self.btn_line)
@@ -465,6 +472,7 @@ class CorrelationGui(QMainWindow):
         self.tools_layout.addWidget(self.btn_grid)
         self.tools_layout.addSpacing(20)
         self.tools_layout.addWidget(self.btn_overlay)
+        self.tools_layout.addWidget(self.btn_3d_map)
         self.tools_layout.addStretch() 
 
         self.main_layout.addWidget(self.left_panel)
@@ -1173,6 +1181,211 @@ class CorrelationGui(QMainWindow):
 
         except Exception as e: print(e)
 
+    def save_paper_figure(self):
+        if self.data_manager.sem_data is None:
+            QMessageBox.warning(self, "Error", "No image loaded to save.")
+            return
+
+        # 1. Preguntar por el Título
+        title, ok_title = QInputDialog.getText(self, "Paper Figure", "Enter Title (Bold):")
+        if not ok_title: return
+
+        # 2. Preguntar si se quieren Ejes o solo Scalebar
+        axes_opts = ["Show Axes", "Only Scalebar"]
+        ax_mode, ok_ax = QInputDialog.getItem(self, "Axes Visibility", "Select axes mode:", axes_opts, 0, False)
+        if not ok_ax: return
+
+        # 3. Preguntar por el Modo de la barra de color
+        modes = ["Inside", "Outside", "None"]
+        cb_mode, ok_mode = QInputDialog.getItem(self, "Colorbar Mode", "Select placement mode:", modes, 0, False)
+        if not ok_mode: return
+
+        # 4. Preguntar por la Posición de la barra de color
+        cb_pos = "Bottom"
+        if cb_mode != "None":
+            positions = ["Top", "Bottom", "Left", "Right"]
+            cb_pos, ok_pos = QInputDialog.getItem(self, "Colorbar Position", "Select side:", positions, 0, False)
+            if not ok_pos: return
+
+        # 5. Pedir ruta de guardado
+        file_path, _ = QFileDialog.getSaveFileName(self, "Save Paper Figure", "", "PNG Files (*.png);;TIF Files (*.tif *.tiff)")
+        if not file_path: return
+
+        # --- INICIO DE TRANSFORMACIÓN PARA PUBLICACIÓN ---
+        from matplotlib.ticker import MaxNLocator, AutoLocator
+
+        original_title = self.ax.get_title()
+        original_cbar_vis = self.cbar.ax.get_visible() if self.cbar else False
+        original_cbar_v_vis = getattr(self, 'cbar_voltage', None) and self.cbar_voltage.ax.get_visible()
+
+        if self.cbar: self.cbar.ax.set_visible(False)
+        if getattr(self, 'cbar_voltage', None): self.cbar_voltage.ax.set_visible(False)
+
+        # Configuración base de la fuente LaTeX
+        paper_rc = {
+            "font.family": "serif",
+            "font.serif": ["cmr10"],
+            "mathtext.fontset": "cm",
+            "axes.formatter.use_mathtext": True,
+            "axes.unicode_minus": False,
+        }
+
+        with plt.rc_context(paper_rc):
+            # Título
+            if title:
+                self.ax.set_title(title, fontweight='bold', fontsize=28, pad=20)
+            else:
+                self.ax.set_title("")
+
+            # Forzar el símbolo \mu matemático para que Computer Modern lo reconozca siempre
+            unit_tex = r"$\mu m$" if self.unit_label == "\u03BCm" else rf"${self.unit_label}$"
+            
+            # Limitar la cantidad de números en los ejes para que no se solapen al ser tan grandes
+            self.ax.xaxis.set_major_locator(MaxNLocator(nbins=4))
+            self.ax.yaxis.set_major_locator(MaxNLocator(nbins=4))
+
+            # Control de Ejes
+            if ax_mode == "Only Scalebar":
+                self.ax.axis('off')
+            else:
+                self.ax.axis('on')
+                self.ax.set_xlabel(rf"[{unit_tex}]", fontsize=28, fontfamily='serif', fontname='cmr10')
+                self.ax.set_ylabel(rf"[{unit_tex}]", fontsize=28, fontfamily='serif', fontname='cmr10')
+                self.ax.tick_params(axis='both', which='major', labelsize=24)
+                
+                for label in self.ax.get_xticklabels() + self.ax.get_yticklabels():
+                    label.set_fontfamily('serif')
+                    label.set_fontname('cmr10')
+
+            # Scalebar más gorda, con texto gigante y el símbolo LaTeX inyectado temporalmente
+            original_sb_fontsize = None
+            original_sb_lw = None
+            original_sb_text = None
+            if self.scale_bar_text:
+                original_sb_text = self.scale_bar_text.get_text()
+                # Reemplazamos el carácter problemático por código LaTeX puro
+                new_text = original_sb_text.replace("\u03BCm", r"$\mu m$")
+                self.scale_bar_text.set_text(new_text)
+                
+                original_sb_fontsize = self.scale_bar_text.get_fontsize()
+                self.scale_bar_text.set_fontsize(26)
+                self.scale_bar_text.set_fontfamily('serif')
+                self.scale_bar_text.set_fontname('cmr10')
+            if self.scale_bar_line:
+                original_sb_lw = self.scale_bar_line.get_linewidth()
+                self.scale_bar_line.set_linewidth(4.5)
+
+            # Preparar datos de la barra
+            active_im = None
+            label_text = ""
+            if self.show_overlay:
+                mode_ui = getattr(self, 'combo_overlay', None)
+                active_mode = mode_ui.currentText() if mode_ui else "EBIC (Current)"
+                if active_mode == "EBIC (Current)" and self.layer_ebic:
+                    active_im = self.layer_ebic
+                    label_text = r"Current [$nA$]"
+                elif active_mode == "Voltage Contrast" and getattr(self, 'layer_voltage', None):
+                    active_im = self.layer_voltage
+                    label_text = r"Voltage [$V$]"
+
+            # Lógica de Colorbar (90% de ancho/alto)
+            temp_cbar = None
+            cax = None
+            
+            if active_im and cb_mode != "None":
+                is_horiz = cb_pos in ["Top", "Bottom"]
+                
+                if cb_mode == "Outside":
+                    # Si va fuera, Matplotlib automáticamente pone los números hacia el exterior
+                    temp_cbar = self.fig.colorbar(active_im, ax=self.ax, location=cb_pos.lower(), shrink=0.9, pad=0.06)
+                    temp_cbar.set_label(label_text, fontsize=28, labelpad=15, fontfamily='serif', fontname='cmr10')
+                    temp_cbar.ax.tick_params(labelsize=24)
+                    
+                    ticks_axis = temp_cbar.ax.xaxis if is_horiz else temp_cbar.ax.yaxis
+                    ticks_axis.set_major_locator(MaxNLocator(nbins=4))
+                    
+                    for label in ticks_axis.get_ticklabels():
+                        label.set_fontfamily('serif')
+                        label.set_fontname('cmr10')
+                
+                elif cb_mode == "Inside":
+                    # Si va dentro, empujamos los números hacia el interior de la imagen
+                    if cb_pos == "Top":
+                        cax = inset_axes(self.ax, width="90%", height="4%", loc='upper center', borderpad=1.5)
+                        temp_cbar = self.fig.colorbar(active_im, cax=cax, orientation='horizontal')
+                        temp_cbar.ax.xaxis.set_ticks_position('bottom')
+                        temp_cbar.ax.xaxis.set_label_position('bottom')
+                    elif cb_pos == "Bottom":
+                        cax = inset_axes(self.ax, width="90%", height="4%", loc='lower center', borderpad=1.5)
+                        temp_cbar = self.fig.colorbar(active_im, cax=cax, orientation='horizontal')
+                        temp_cbar.ax.xaxis.set_ticks_position('top')
+                        temp_cbar.ax.xaxis.set_label_position('top')
+                    elif cb_pos == "Left":
+                        cax = inset_axes(self.ax, width="4%", height="90%", loc='center left', borderpad=1.5)
+                        temp_cbar = self.fig.colorbar(active_im, cax=cax, orientation='vertical')
+                        temp_cbar.ax.yaxis.set_ticks_position('right')
+                        temp_cbar.ax.yaxis.set_label_position('right')
+                    elif cb_pos == "Right":
+                        cax = inset_axes(self.ax, width="4%", height="90%", loc='center right', borderpad=1.5)
+                        temp_cbar = self.fig.colorbar(active_im, cax=cax, orientation='vertical')
+                        temp_cbar.ax.yaxis.set_ticks_position('left')
+                        temp_cbar.ax.yaxis.set_label_position('left')
+
+                    temp_cbar.set_label(label_text, color='white', fontsize=28, labelpad=10, fontfamily='serif', fontname='cmr10')
+                    temp_cbar.ax.tick_params(colors='white', labelsize=24)
+                    
+                    ticks_axis = temp_cbar.ax.xaxis if is_horiz else temp_cbar.ax.yaxis
+                    ticks_axis.set_major_locator(MaxNLocator(nbins=4))
+
+                    for label in ticks_axis.get_ticklabels():
+                        label.set_color('white')
+                        label.set_fontfamily('serif')
+                        label.set_fontname('cmr10')
+                        
+                    temp_cbar.outline.set_edgecolor('white')
+                    temp_cbar.outline.set_linewidth(1.5)
+
+            # Renderizar y Guardar
+            self.canvas.draw()
+            self.fig.savefig(file_path, bbox_inches='tight', dpi=300)
+
+            # --- RESTAURACIÓN ---
+            self.ax.axis('on') 
+            self.ax.xaxis.set_major_locator(AutoLocator())
+            self.ax.yaxis.set_major_locator(AutoLocator())
+
+            self.ax.set_title(original_title, fontweight='normal', fontsize=12) 
+            self.ax.set_xlabel(f"Distance ({self.unit_label})", fontfamily='sans-serif', fontsize=10)
+            self.ax.set_ylabel(f"Distance ({self.unit_label})", fontfamily='sans-serif', fontsize=10)
+            self.ax.tick_params(axis='both', which='major', labelsize=10)
+            
+            for label in self.ax.get_xticklabels() + self.ax.get_yticklabels():
+                label.set_fontfamily('sans-serif')
+
+            # Restauramos el texto original de la escala (con el símbolo unicode normal)
+            if self.scale_bar_text and original_sb_text is not None:
+                self.scale_bar_text.set_text(original_sb_text)
+                self.scale_bar_text.set_fontsize(original_sb_fontsize)
+                self.scale_bar_text.set_fontfamily('sans-serif')
+            if self.scale_bar_line and original_sb_lw:
+                self.scale_bar_line.set_linewidth(original_sb_lw)
+
+            # Borramos la barra de color (que a su vez borra el cax)
+            if temp_cbar: 
+                try: temp_cbar.remove()
+                except Exception: pass
+            
+            # Por si acaso Matplotlib no borró el cax, intentamos borrarlo con cuidado
+            if cax: 
+                try: cax.remove()
+                except Exception: pass
+
+            if self.cbar and original_cbar_vis: self.cbar.ax.set_visible(True)
+            if getattr(self, 'cbar_voltage', None) and original_cbar_v_vis: self.cbar_voltage.ax.set_visible(True)
+
+            self.canvas.draw_idle()
+
+        self.status_bar.showMessage(f"Paper Figure saved successfully to: {file_path}", 6000)
     # --------------------------------------------------------
     def reset_entire_state(self):
         self.layer_sem = None
@@ -1749,6 +1962,47 @@ class CorrelationGui(QMainWindow):
             
         # Llamar al toggle actualiza el título forzosamente con el nuevo valor %
         self.toggle_overlay()
+
+    def action_show_3d_ebic(self):
+        """Genera y muestra un mapa de superficie 3D del EBIC actual."""
+        if self.data_manager.current_map is None:
+            QMessageBox.warning(self, "Error", "An EBIC map is required to generate the 3D surface.")
+            return
+
+        # Recopilamos el contexto completo para presentarlo en el título del gráfico
+        file_name = self.current_filename if hasattr(self, 'current_filename') else "Unknown file"
+        px_val = f"{self.data_manager.pixel_size * self.unit_factor:.2f}" if self.data_manager.pixel_size else "N/A"
+        
+        params = (f"File: {file_name} | Palette: {self.current_cmap}\n"
+                  f"Dimensions: {self.width_phys:.1f} x {self.height_phys:.1f} {self.unit_label} "
+                  f"| Pixel size: {px_val} {self.unit_label}/px")
+
+        # Limpiar ventanas fantasma cerradas
+       # --- FIX: Limpiar ventanas fantasma sin crashear ---
+        active_windows = []
+        for w in getattr(self, 'plot_windows', []):
+            try:
+                if w.isVisible():
+                    active_windows.append(w)
+            except RuntimeError:
+                # Si PyQt lanza un error, el objeto C++ ya fue destruido al cerrar la ventana.
+                # Simplemente lo ignoramos y no lo añadimos a la lista de activas.
+                pass
+                
+        self.plot_windows = active_windows
+        # ---------------------------------------------------
+
+        # Crear y mostrar la ventana 3D
+        win3d = EBIC3DWindow(
+            ebic_data=self.data_manager.current_map,
+            cmap_name=self.current_cmap,
+            width_phys=self.width_phys,
+            height_phys=self.height_phys,
+            unit_label=self.unit_label,
+            title_params=params
+        )
+        win3d.show()
+        self.plot_windows.append(win3d)
 
     # ==========================================================
     # --- NANOWIRES DETECTION LOGIC ---

@@ -1,10 +1,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT
 from PyQt6.QtWidgets import (QMainWindow, QToolBar, QFileDialog, QMessageBox, QDialog,
-                             QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QDoubleSpinBox, QPushButton)
+                             QVBoxLayout, QHBoxLayout, QLabel, QSpinBox, QDoubleSpinBox, QPushButton, QWidget, QSlider)
 from PyQt6.QtGui import QAction
 from PyQt6.QtCore import Qt
 from perpendicular_fitting import PerpendicularFitter
@@ -593,3 +594,107 @@ class ProfileManager:
             self.active_handle = None
             return True
         return False
+
+class EBIC3DWindow(QMainWindow):
+    def __init__(self, ebic_data, cmap_name, width_phys, height_phys, unit_label, title_params):
+        super().__init__()
+        self.setWindowTitle("3D EBIC Surface Map")
+        self.resize(900, 800)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+
+        self.main_widget = QWidget()
+        self.setCentralWidget(self.main_widget)
+        
+        # --- NUEVO: ESTRUCTURA DE LAYOUTS PARA SLIDERS ---
+        main_layout = QVBoxLayout(self.main_widget)
+
+        # Crear la figura y el canvas
+        self.fig = Figure()
+        self.canvas = FigureCanvas(self.fig)
+        self.toolbar = NavigationToolbar2QT(self.canvas, self)
+
+        # 1. Configurar Slider Horizontal (Rotación / Azimuth)
+        self.slider_azimuth = QSlider(Qt.Orientation.Horizontal)
+        self.slider_azimuth.setRange(-180, 180)
+        self.slider_azimuth.setValue(-45)  # Ángulo inicial
+
+        # 2. Configurar Slider Vertical (Inclinación / Elevation)
+        self.slider_elevation = QSlider(Qt.Orientation.Vertical)
+        self.slider_elevation.setRange(-90, 90)
+        self.slider_elevation.setValue(35)   # Altura inicial
+
+        # Conectar los sliders a la función que mueve la cámara
+        self.slider_azimuth.valueChanged.connect(self.update_camera)
+        self.slider_elevation.valueChanged.connect(self.update_camera)
+
+        # Ensamblar la ventana: Toolbar arriba
+        main_layout.addWidget(self.toolbar)
+        
+        # En el medio: Canvas a la izquierda, Slider vertical a la derecha
+        canvas_layout = QHBoxLayout()
+        canvas_layout.addWidget(self.canvas)
+        canvas_layout.addWidget(self.slider_elevation)
+        main_layout.addLayout(canvas_layout)
+        
+        # Abajo del todo: Slider horizontal
+        main_layout.addWidget(self.slider_azimuth)
+        # ------------------------------------------------
+
+        self.ax = self.fig.add_subplot(111, projection='3d')
+
+        # Dimensiones originales y submuestreo de rendimiento
+        h, w = ebic_data.shape
+        x = np.linspace(0, width_phys, w)
+        y = np.linspace(0, height_phys, h)
+
+        step_h = max(1, h // 120)
+        step_w = max(1, w // 120)
+
+        x_sub = x[::step_w]
+        y_sub = y[::step_h]
+        X, Y = np.meshgrid(x_sub, y_sub)
+        
+        Z = np.copy(ebic_data[::step_h, ::step_w]).astype(float)
+
+        # Dibujar la superficie
+        surf = self.ax.plot_surface(X, Y, Z, 
+                                    cmap=cmap_name, 
+                                    linewidth=0,          
+                                    antialiased=False,    
+                                    shade=True,           
+                                    edgecolors='none')
+
+        # Hacer invisibles las paredes grises de la caja
+        self.ax.xaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
+        self.ax.yaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
+        self.ax.zaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
+        
+        self.ax.xaxis.line.set_color((1.0, 1.0, 1.0, 0.0))
+        self.ax.yaxis.line.set_color((1.0, 1.0, 1.0, 0.0))
+        self.ax.zaxis.line.set_color((1.0, 1.0, 1.0, 0.0))
+
+        # Configuración visual
+        self.cbar = self.fig.colorbar(surf, ax=self.ax, shrink=0.5, pad=0.1)
+        self.cbar.set_label(r"Current [$nA$]")
+
+        self.ax.set_xlabel(rf"X Distance [${unit_label}$]", labelpad=10)
+        self.ax.set_ylabel(rf"Y Distance [${unit_label}$]", labelpad=10)
+        self.ax.set_zlabel(r"Current [$nA$]", labelpad=10)
+
+        self.ax.set_title(rf"3D EBIC Surface Representation" + "\n" + title_params, fontsize=12, pad=20)
+        
+        # Aplicamos la vista inicial leyendo los valores de los sliders
+        self.ax.view_init(elev=self.slider_elevation.value(), azim=self.slider_azimuth.value())
+
+        self.fig.tight_layout()
+        self.canvas.draw()
+
+    # --- NUEVA FUNCIÓN PARA MOVER LA CÁMARA ---
+    def update_camera(self):
+        """Actualiza el ángulo del gráfico 3D instantáneamente al mover las barras."""
+        elev = self.slider_elevation.value()
+        azim = self.slider_azimuth.value()
+        self.ax.view_init(elev=elev, azim=azim)
+        
+        # draw_idle() es vital aquí: agrupa los refrescos para no colapsar si mueves el slider muy rápido
+        self.canvas.draw_idle()
