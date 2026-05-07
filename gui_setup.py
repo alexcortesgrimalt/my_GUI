@@ -69,7 +69,7 @@ class CorrelationGui(QMainWindow):
         self.scale_bar_text = None
         
         self.colormaps = ['plasma', 'viridis', 'inferno', 'magma', 'cividis', 'rainbow', 'jet', 'gray']
-        self.current_cmap = 'plasma'
+        self.current_cmap = 'jet'
 
         # Interactive variables
         self.pan_start = None 
@@ -1969,7 +1969,6 @@ class CorrelationGui(QMainWindow):
             QMessageBox.warning(self, "Error", "An EBIC map is required to generate the 3D surface.")
             return
 
-        # Recopilamos el contexto completo para presentarlo en el título del gráfico
         file_name = self.current_filename if hasattr(self, 'current_filename') else "Unknown file"
         px_val = f"{self.data_manager.pixel_size * self.unit_factor:.2f}" if self.data_manager.pixel_size else "N/A"
         
@@ -1977,29 +1976,29 @@ class CorrelationGui(QMainWindow):
                   f"Dimensions: {self.width_phys:.1f} x {self.height_phys:.1f} {self.unit_label} "
                   f"| Pixel size: {px_val} {self.unit_label}/px")
 
-        # Limpiar ventanas fantasma cerradas
-       # --- FIX: Limpiar ventanas fantasma sin crashear ---
         active_windows = []
         for w in getattr(self, 'plot_windows', []):
             try:
                 if w.isVisible():
                     active_windows.append(w)
             except RuntimeError:
-                # Si PyQt lanza un error, el objeto C++ ya fue destruido al cerrar la ventana.
-                # Simplemente lo ignoramos y no lo añadimos a la lista de activas.
                 pass
                 
         self.plot_windows = active_windows
-        # ---------------------------------------------------
 
-        # Crear y mostrar la ventana 3D
+        # --- NUEVO: Extraer los límites de color del mapa 2D actual ---
+        current_vmin, current_vmax = self.layer_ebic.get_clim()
+
+        # Crear y mostrar la ventana 3D pasando los límites
         win3d = EBIC3DWindow(
             ebic_data=self.data_manager.current_map,
             cmap_name=self.current_cmap,
             width_phys=self.width_phys,
             height_phys=self.height_phys,
             unit_label=self.unit_label,
-            title_params=params
+            title_params=params,
+            vmin=current_vmin,  # <--- PASAMOS EL VMIN
+            vmax=current_vmax   # <--- PASAMOS EL VMAX
         )
         win3d.show()
         self.plot_windows.append(win3d)

@@ -9,6 +9,10 @@ from PyQt6.QtWidgets import (QMainWindow, QToolBar, QFileDialog, QMessageBox, QD
 from PyQt6.QtGui import QAction
 from PyQt6.QtCore import Qt
 from perpendicular_fitting import PerpendicularFitter
+from matplotlib.colors import Normalize
+from matplotlib.cm import ScalarMappable
+import matplotlib.pyplot as plt
+from skimage.measure import block_reduce
 
 def gradient_with_window(x, y, window=9):
     """
@@ -596,7 +600,7 @@ class ProfileManager:
         return False
 
 class EBIC3DWindow(QMainWindow):
-    def __init__(self, ebic_data, cmap_name, width_phys, height_phys, unit_label, title_params):
+    def __init__(self, ebic_data, cmap_name, width_phys, height_phys, unit_label, title_params, vmin=None, vmax=None):
         super().__init__()
         self.setWindowTitle("3D EBIC Surface Map")
         self.resize(900, 800)
@@ -642,39 +646,86 @@ class EBIC3DWindow(QMainWindow):
 
         self.ax = self.fig.add_subplot(111, projection='3d')
 
-        # Dimensiones originales y submuestreo de rendimiento
+        # Dimensiones originales y submuestreo
+        # Dimensiones originales y submuestreo
         h, w = ebic_data.shape
-        x = np.linspace(0, width_phys, w)
-        y = np.linspace(0, height_phys, h)
+        target_res = 100
 
-        step_h = max(1, h // 120)
-        step_w = max(1, w // 120)
+        step_h = max(1, h // target_res)
+        step_w = max(1, w // target_res)
 
-        x_sub = x[::step_w]
-        y_sub = y[::step_h]
+        global_mean = np.mean(ebic_data)
+
+        # 1. Recortar la imagen original para que sea un múltiplo exacto de los 'steps'
+        h_crop = (h // step_h) * step_h
+        w_crop = (w // step_w) * step_w
+        data_cropped = ebic_data[:h_crop, :w_crop]
+
+        # 2. Nuevas dimensiones de la matriz reducida
+        h_sub = h_crop // step_h
+        w_sub = w_crop // step_w
+
+        # 3. Reshape mágico en 4 dimensiones
+        blocks = data_cropped.reshape(h_sub, step_h, w_sub, step_w)
+
+        # --- EL PASO CLAVE QUE FALTABA ---
+        # Reordenamos los ejes para que quede: (Alto del mapa, Ancho del mapa, Alto del azulejo, Ancho del azulejo)
+        spatial_blocks = blocks.transpose(0, 2, 1, 3)
+
+        # 4. Colapsar solo los píxeles internos de cada azulejo (ahora sí están bien agrupados)
+        blocks_flat_inner = spatial_blocks.reshape(h_sub, w_sub, step_h * step_w)
+
+        # 5. Calcular desviaciones respecto a la media global
+        deviations = np.abs(blocks_flat_inner - global_mean)
+
+        # 6. Encontrar el índice del píxel más alejado DENTRO de cada bloque
+        max_dev_indices = np.argmax(deviations, axis=2)
+
+        # 7. Extraer el valor real (con su signo) de esos índices ganadores
+        Z = np.take_along_axis(blocks_flat_inner, max_dev_indices[..., np.newaxis], axis=2).squeeze(axis=2)
+
+        # ==========================================================
+        # NUEVAS COORDENADAS
+        # ==========================================================
+        x_sub = np.linspace(0, width_phys, w_sub)
+        y_sub = np.linspace(0, height_phys, h_sub)
+
         X, Y = np.meshgrid(x_sub, y_sub)
-        
-        Z = np.copy(ebic_data[::step_h, ::step_w]).astype(float)
 
-        # Dibujar la superficie
-        surf = self.ax.plot_surface(X, Y, Z, 
-                                    cmap=cmap_name, 
-                                    linewidth=0,          
-                                    antialiased=False,    
-                                    shade=True,           
-                                    edgecolors='none')
+        # ==========================================================
+        # NORMALIZACIÓN DE COLOR
+        # ==========================================================
 
-        # Hacer invisibles las paredes grises de la caja
-        self.ax.xaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
-        self.ax.yaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
-        self.ax.zaxis.set_pane_color((1.0, 1.0, 1.0, 0.0))
-        
-        self.ax.xaxis.line.set_color((1.0, 1.0, 1.0, 0.0))
-        self.ax.yaxis.line.set_color((1.0, 1.0, 1.0, 0.0))
-        self.ax.zaxis.line.set_color((1.0, 1.0, 1.0, 0.0))
+        norm = Normalize(vmin=vmin, vmax=vmax)
 
-        # Configuración visual
-        self.cbar = self.fig.colorbar(surf, ax=self.ax, shrink=0.5, pad=0.1)
+        # ==========================================================
+        # SURFACE PLOT
+        # ==========================================================
+
+        surf = self.ax.plot_surface(
+            X,
+            Y,
+            Z,
+            cmap=cmap_name,
+            norm=norm,
+            linewidth=0,
+            antialiased=False,
+            shade=False,
+            rcount=h_sub,
+            ccount=w_sub
+        )
+
+        # ==========================================================
+        # COLORBAR
+        # ==========================================================
+
+        self.cbar = self.fig.colorbar(
+            surf,
+            ax=self.ax,
+            shrink=0.5,
+            pad=0.1
+        )
+
         self.cbar.set_label(r"Current [$nA$]")
 
         self.ax.set_xlabel(rf"X Distance [${unit_label}$]", labelpad=10)
@@ -698,3 +749,4 @@ class EBIC3DWindow(QMainWindow):
         
         # draw_idle() es vital aquí: agrupa los refrescos para no colapsar si mueves el slider muy rápido
         self.canvas.draw_idle()
+
