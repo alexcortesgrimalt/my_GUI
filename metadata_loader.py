@@ -11,6 +11,9 @@ class Metadata:
             'rdf': 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
             'image': 'http://ns.pointelectronic.com/Image/1.0/',
             'efa': 'http://ns.pointelectronic.com/EFA/1.0/',
+            'cdev': 'http://ns.pointelectronic.com/CommonDevice/1.0/',
+            'd6sp': 'http://ns.pointelectronic.com/DISS6/1.0/types/ScanParameters#',
+            'photoshop': 'http://ns.adobe.com/photoshop/1.0/'
         }
 
         try:
@@ -43,7 +46,17 @@ class Metadata:
             'InputOffset': get_nested_value('efa:InputOffset', 0.0),
             'InverseEnabled': bool(int(desc.findtext('efa:InverseEnabled', '0', namespaces=ns))),
             'BiasEnabled': bool(int(desc.findtext('efa:BiasEnabled', '0', namespaces=ns))),
-            'BiasVoltage': get_nested_value('efa:Bias', 0.0)
+            'BiasVoltage': get_nested_value('efa:Bias', 0.0),
+           
+            'BeamCurrent': get_nested_value('cdev:BeamCurrent', 0.0),
+            'AccelerationVoltage': get_nested_value('cdev:HV', 0.0),
+            'Magnification': float(desc.findtext('cdev:Mag', '0.0', namespaces=ns)),
+            'WorkingDistance_mm': get_nested_value('cdev:WD', 0.0),
+            'ScanRotation_deg': get_nested_value('cdev:ScanRotAngle', 0.0),
+            'BiasVoltage': get_nested_value('efa:Bias', 0.0),
+            'TimeConstant': get_nested_value('efa:TimeConstant', 0.0),
+            'DwellTime_us': float(desc.findtext('d6sp:ScanParameters/d6sp:AcquisitionTime', '0us', namespaces=ns).replace('us','')),
+            'DateCreated': desc.findtext('photoshop:DateCreated', 'Unknown', namespaces=ns)
         }
         return data
 

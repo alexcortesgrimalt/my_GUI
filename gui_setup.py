@@ -418,6 +418,11 @@ class CorrelationGui(QMainWindow):
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+        
+        # --- NUEVA ETIQUETA: Parámetros del SEM ---
+        self.lbl_sem_params = QLabel("SEM: - kV  |  WD: - mm  |  Bias: - V  |  Gain: -   |   ")
+        self.status_bar.addPermanentWidget(self.lbl_sem_params)
+        
         self.lbl_coords = QLabel("Coordinates (Px): - , -")
         self.status_bar.addPermanentWidget(self.lbl_coords)
 
@@ -773,6 +778,33 @@ class CorrelationGui(QMainWindow):
         nws_layout.addWidget(self.chk_nw_inverse)
         nws_layout.addSpacing(10)
 
+        # =========================================================
+        # --- NUEVO: OPCIONES DE DENOISING (PROMEDIADO) ---
+        # =========================================================
+        h_denoise_layout = QHBoxLayout()
+        self.chk_nw_denoise = QCheckBox("Denoising (Orthogonal Average)")
+        self.chk_nw_denoise.setChecked(False)
+        
+        self.spin_nw_denoise_width = QSpinBox()
+        # Rango impar es ideal para que el píxel central quede en el medio (ej: 5 -> -2, -1, 0, 1, 2)
+        self.spin_nw_denoise_width.setRange(3, 101) 
+        self.spin_nw_denoise_width.setSingleStep(2)
+        self.spin_nw_denoise_width.setValue(5)
+        self.spin_nw_denoise_width.setSuffix(" px")
+        self.spin_nw_denoise_width.setEnabled(False) 
+        
+        # Conectar el checkbox para activar/desactivar el spinbox numérico
+        self.chk_nw_denoise.toggled.connect(self.spin_nw_denoise_width.setEnabled)
+
+        h_denoise_layout.addWidget(self.chk_nw_denoise)
+        h_denoise_layout.addWidget(QLabel("Width:"))
+        h_denoise_layout.addWidget(self.spin_nw_denoise_width)
+        h_denoise_layout.addStretch()
+        
+        nws_layout.addLayout(h_denoise_layout)
+        nws_layout.addSpacing(10)
+        # =========================================================
+
         self.btn_detect_nws = QPushButton("Detect NWs")
         self.btn_detect_nws.setStyleSheet("QPushButton { font-weight: bold; background-color: #ffeeba; padding: 6px; }")
         self.btn_detect_nws.clicked.connect(self.action_detect_nws)
@@ -898,6 +930,12 @@ class CorrelationGui(QMainWindow):
         self.btn_prev_frame.setEnabled(False)
         self.btn_next_frame.setEnabled(False)
         self.lbl_frame_info.setText("Frame: - / -")
+
+        # --- NUEVO: Resetear el texto extendido ---
+        if hasattr(self, 'lbl_sem_params'):
+            self.lbl_sem_params.setText("SEM: - kV  |  WD: - mm  |  Bias: - V  |  Gain: -   |   ")
+            
+        self.canvas.draw()
         
         self.canvas.draw()
 
@@ -953,6 +991,31 @@ class CorrelationGui(QMainWindow):
             # Extraer solo el nombre del archivo para los títulos de los gráficos
             self.current_filename = os.path.basename(file_path)
             
+            if hasattr(self.data_manager, 'metadata') and self.data_manager.metadata:
+                m_data = self.data_manager.metadata
+                
+                I_beam_pA = m_data.get('BeamCurrent', 0.0) * 1e6        
+                V_acc_kV = m_data.get('AccelerationVoltage', 0.0) 
+                
+                wd_mm = m_data.get('WorkingDistance_mm', 0.0)
+                gain = m_data.get('EffectiveAmpGain', 0.0)
+                
+                # --- NUEVA LÓGICA DEL BIAS ---
+                v_bias_raw = m_data.get('BiasVoltage', 0.0)
+                bias_enabled = m_data.get('BiasEnabled', False)
+                
+                if bias_enabled:
+                    bias_str = f"{v_bias_raw:.2f} V"
+                else:
+                    bias_str = "OFF" # O puedes poner "0.00 V" si lo prefieres
+                
+                # Formatear la ganancia en notación científica
+                gain_str = f"{gain:.0e}" if gain > 0 else "Unknown"
+                
+                self.lbl_sem_params.setText(f"SEM: {V_acc_kV:.1f} kV  |  WD: {wd_mm:.1f} mm  |  Bias: {bias_str}  |  Gain: {gain_str}   |   ")
+            else:
+                self.lbl_sem_params.setText("SEM: Unknown  |  WD: Unknown  |  Bias: Unknown  |  Gain: Unknown   |   ")
+
             self.initialize_plot()
             
             # Actualizar estado de los botones de navegación
@@ -2238,14 +2301,52 @@ class CorrelationGui(QMainWindow):
             c_vals = np.linspace(c1, c2, N)
             r_vals = np.linspace(r1, r2, N)
             
-            sem_prof = ndi.map_coordinates(sem_data, [r_vals, c_vals], order=1, mode='nearest')
-            ebic_prof = ndi.map_coordinates(ebic_data, [r_vals, c_vals], order=1, mode='nearest')
-            vc_prof = ndi.map_coordinates(vc_data, [r_vals, c_vals], order=1, mode='nearest') 
+            # --- NUEVO: LÓGICA DE DENOISING (PROMEDIADO ORTOGONAL) ---
+            apply_denoise = self.chk_nw_denoise.isChecked()
+            denoise_w = self.spin_nw_denoise_width.value()
+            
+            if apply_denoise and denoise_w > 1:
+                hw = denoise_w // 2
+                offsets = np.arange(-hw, hw + 1)
+                
+                # Calcular vector unitario normal (perpendicular) al nanohilo
+                v_c = c2 - c1
+                v_r = r2 - r1
+                length_px = np.hypot(v_c, v_r)
+                if length_px == 0: length_px = 1e-12
+                n_c = -v_r / length_px  # Normal vector componente X
+                n_r = v_c / length_px   # Normal vector componente Y
+            else:
+                offsets = [0]
+                n_c = 0
+                n_r = 0
+                
+            sem_acc = np.zeros(N)
+            ebic_acc = np.zeros(N)
+            vc_acc = np.zeros(N)
+            
+            # Recolectar datos iterando a través del grosor de la banda
+            for offset in offsets:
+                c_off = c_vals + offset * n_c
+                r_off = r_vals + offset * n_r
+                
+                sem_acc += ndi.map_coordinates(sem_data, [r_off, c_off], order=1, mode='nearest')
+                ebic_acc += ndi.map_coordinates(ebic_data, [r_off, c_off], order=1, mode='nearest')
+                vc_acc += ndi.map_coordinates(vc_data, [r_off, c_off], order=1, mode='nearest')
+                
+            num_lines = len(offsets)
+            sem_prof = sem_acc / num_lines
+            ebic_prof = ebic_acc / num_lines
+            vc_prof = vc_acc / num_lines
+            # ---------------------------------------------------------
             
             dist_um = np.linspace(0, np.hypot(ex - sx, ey - sy), N)
             
-            win_title = f"NW_{idx+1}{param_str}"
-            # Añadimos 'deriv_vc' a la lista para mostrar el gradiente de potencial
+            # Se inyecta la variable del Denoising en el título de la ventana
+            # para garantizar que este parámetro esté visible al presentar los gráficos finales
+            denoise_str = f" | Denoised: {denoise_w}px" if apply_denoise else ""
+            win_title = f"NW_{idx+1}{param_str}{denoise_str}"
+            
             win = ProfilePlotWindow(win_title, dist_um, sem_prof, ebic_prof, vc_prof, selected_keys, self.unit_label)
             win.show()
             self.plot_windows.append(win)
