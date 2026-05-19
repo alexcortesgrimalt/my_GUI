@@ -419,6 +419,9 @@ class CorrelationGui(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         
+        self.lbl_preamp = QLabel("  PreAmp Offset: - %")
+        self.status_bar.addWidget(self.lbl_preamp)
+
         # --- NUEVA ETIQUETA: Parámetros del SEM ---
         self.lbl_sem_params = QLabel("SEM: - kV  |  WD: - mm  |  Bias: - V  |  Gain: -   |   ")
         self.status_bar.addPermanentWidget(self.lbl_sem_params)
@@ -935,7 +938,8 @@ class CorrelationGui(QMainWindow):
         if hasattr(self, 'lbl_sem_params'):
             self.lbl_sem_params.setText("SEM: - kV  |  WD: - mm  |  Bias: - V  |  Gain: -   |   ")
             
-        self.canvas.draw()
+        if hasattr(self, 'lbl_preamp'):
+            self.lbl_preamp.setText("  PreAmp Offset: - %")
         
         self.canvas.draw()
 
@@ -993,7 +997,10 @@ class CorrelationGui(QMainWindow):
             
             if hasattr(self.data_manager, 'metadata') and self.data_manager.metadata:
                 m_data = self.data_manager.metadata
-                
+
+                offset_pct = m_data.get('ZeroOffset_pct', 0.0)
+                self.lbl_preamp.setText(f"  PreAmp Offset: {offset_pct:.1f} %")
+
                 I_beam_pA = m_data.get('BeamCurrent', 0.0) * 1e6        
                 V_acc_kV = m_data.get('AccelerationVoltage', 0.0) 
                 

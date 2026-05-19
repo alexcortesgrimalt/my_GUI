@@ -56,6 +56,7 @@ class Metadata:
             'BiasVoltage': get_nested_value('efa:Bias', 0.0),
             'TimeConstant': get_nested_value('efa:TimeConstant', 0.0),
             'DwellTime_us': float(desc.findtext('d6sp:ScanParameters/d6sp:AcquisitionTime', '0us', namespaces=ns).replace('us','')),
+            'ZeroOffset_pct': get_nested_value('efa:ZeroOffset', 0.0),
             'DateCreated': desc.findtext('photoshop:DateCreated', 'Unknown', namespaces=ns)
         }
         return data
