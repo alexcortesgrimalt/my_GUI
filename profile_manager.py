@@ -13,6 +13,7 @@ from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
 import matplotlib.pyplot as plt
 from skimage.measure import block_reduce
+from matplotlib.ticker import MaxNLocator
 
 def gradient_with_window(x, y, window=9):
     """
@@ -40,36 +41,155 @@ def gradient_with_window(x, y, window=9):
 class ProfilePlotWindow(QMainWindow):
     def __init__(self, prof_idx, dist, sem, ebic, vc, selected_keys, unit_label="\u03BCm"):
         super().__init__()
-        
-        # --- NUEVO: ESTILO CIENTÍFICO / LATEX ---
-        plt.rcParams.update({
-            "font.family": "serif",
-            "font.serif": ["Computer Modern Roman", "Times New Roman", "serif"],
-            "mathtext.fontset": "cm",      # Usa fuente tipo LaTeX para las matemáticas
-            "axes.formatter.use_mathtext": True,
-            "axes.linewidth": 0.8,         # Bordes de los gráficos más finos
-            "xtick.major.width": 0.8,
-            "ytick.major.width": 0.8,
-            "xtick.direction": "in",       # Ticks hacia adentro (estilo clásico paper)
-            "ytick.direction": "in",
-            "font.size": 11,               # Tamaño base de la fuente
-            "axes.titlesize": 12,
-            "axes.labelsize": 11
-        })
-        # ----------------------------------------
-
         self.setWindowTitle(f"Perpendicular {prof_idx} Data")
-        self.resize(700, 200 * len(selected_keys) + 100)
+        # Hacemos la ventana un poco más alta por defecto para acomodar las fuentes gigantes
+        self.resize(800, 250 * len(selected_keys) + 150)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         
-        self.fig, self.axes = plt.subplots(len(selected_keys), 1, sharex=True)
-        self.canvas = FigureCanvas(self.fig)
-        self.setCentralWidget(self.canvas)
+        # ==========================================
+        # 0. PLOT SETTINGS (LATEX STYLE & HUGE SIZES)
+        # ==========================================
+        paper_rc = {
+            'font.family': 'serif',
+            'mathtext.fontset': 'cm',  # Computer Modern (LaTeX look)
+            'axes.labelsize': 28,      # Huge axis labels
+            'xtick.labelsize': 20,     # Huge X numbers
+            'ytick.labelsize': 20,     # Huge Y numbers
+            'legend.fontsize': 16,     # Tamaño ajustado para la leyenda
+            'legend.title_fontsize': 18,
+            'axes.linewidth': 1.5,     # Bordes de los gráficos un poco más gruesos
+            'xtick.major.width': 1.5,
+            'ytick.major.width': 1.5,
+            'xtick.direction': 'in',   # Ticks hacia adentro (estilo paper clásico)
+            'ytick.direction': 'in',
+            'axes.titlesize': 22       # Título principal grande
+        }
 
-        self.toolbar = NavigationToolbar2QT(self.canvas, self)
-        self.addToolBar(self.toolbar)
-        
-        # Barra de herramientas para exportar
+        # --- ENVOLVEMOS LA CREACIÓN Y EL PLOTEO EN EL CONTEXTO LATEX ---
+        with plt.rc_context(paper_rc):
+            self.fig, self.axes = plt.subplots(len(selected_keys), 1, sharex=True)
+            self.canvas = FigureCanvas(self.fig)
+            self.setCentralWidget(self.canvas)
+
+            self.toolbar = NavigationToolbar2QT(self.canvas, self)
+            self.addToolBar(self.toolbar)
+            
+            # Barras de herramientas para exportar y hacer fitting
+            self._setup_toolbars()
+            
+            # Asegurarnos de que axes sea iterable
+            if len(selected_keys) == 1:
+                ax_list = [self.axes]
+            else:
+                ax_list = self.axes
+                
+            # Cálculos de datos
+            self.dist = dist
+            self.sem_norm = (sem - np.min(sem)) / (np.ptp(sem) + 1e-12)
+            self.i = ebic
+            self.abs_i = np.abs(ebic)
+            self.vc = vc
+            
+            # Determinamos el array de distancia para derivadas
+            if unit_label == "\u03BCm":
+                dist_um_array = self.dist
+                unit_tex = r"\mu\mathrm{m}"
+            elif unit_label == "nm":
+                dist_um_array = self.dist * 1e-3
+                unit_tex = r"\mathrm{nm}"
+            elif unit_label == "mm":
+                dist_um_array = self.dist * 1e3
+                unit_tex = r"\mathrm{mm}"
+            else:
+                dist_um_array = self.dist
+                unit_tex = fr"\mathrm{{{unit_label}}}"
+
+            if len(self.dist) > 1:
+                self.deriv_i = gradient_with_window(dist_um_array, ebic, window=9)
+            else:
+                self.deriv_i = np.zeros_like(self.dist)
+
+            # CÁLCULO DE RESISTIVIDAD PUNTO A PUNTO
+            pos = self.abs_i[self.abs_i > 0]
+            floor = max(np.min(pos) * 0.1, 1e-12) if pos.size > 0 else 1e-12
+            self.ln_i = np.log(np.maximum(self.abs_i, floor))
+            
+            if len(dist) > 1: self.deriv = gradient_with_window(dist, self.ln_i, window=9)
+            else: self.deriv = np.zeros_like(self.ln_i)
+
+            if self.vc is not None:
+                i_amp = np.maximum(self.abs_i, 1e-6) * 1e-9  
+                self.resistance = np.abs(self.vc) / i_amp
+            else:
+                self.resistance = np.zeros_like(self.dist)
+                
+            if len(dist) > 1 and self.vc is not None:
+                factor_cm = 1e-4 if unit_label == "\u03BCm" else 1e-7 if unit_label == "nm" else 1e-1
+                dist_cm = self.dist * factor_cm 
+                self.deriv_vc = gradient_with_window(dist_cm, self.vc, window=9)
+            else:
+                self.deriv_vc = np.zeros_like(self.dist)
+                self.resistivity = np.zeros_like(self.dist)
+            
+            self.properties = None
+            
+            # --- DIBUJAR CADA GRÁFICO (CON GROSOR DE LÍNEA 2.5) ---
+            for idx, key in enumerate(selected_keys):
+                ax = ax_list[idx]
+                if key == 'sem':
+                    ax.plot(dist, self.sem_norm, color='#1f77b4', lw=2.5, label='SEM (norm)')
+                    ax.set_ylabel(r"$\mathrm{SEM \ norm}$", color='#1f77b4')
+                elif key == 'i':
+                    ax.plot(dist, self.i, color='#9467bd', lw=2.5, label=r'$I$')
+                    ax.set_ylabel(r"$I \ (\mathrm{nA})$", color='#9467bd')
+                    ax.axhline(0, color='gray', linestyle=':', lw=1.5, alpha=0.7)
+                elif key == 'abs_i':
+                    ax.plot(dist, self.abs_i, color='#d62728', lw=2.5)
+                    ax.set_ylabel(r"$|I| \ (\mathrm{nA})$", color='#d62728')
+                elif key == 'ln_i':
+                    ax.plot(dist, self.ln_i, color='#ff7f0e', lw=2.5)
+                    ax.set_ylabel(r"$\ln |I|$", color='#ff7f0e')
+                elif key == 'deriv':
+                    ax.plot(dist, self.deriv, color='#2ca02c', lw=2.5)
+                    ax.set_ylabel(fr"$\mathrm{{d}}\ln(I)/\mathrm{{d}}x \ (1/{unit_tex})$", color='#2ca02c')
+                    ax.axhline(0, color='gray', linestyle=':', lw=1.5, alpha=0.7)
+                elif key == 'vc': 
+                    if self.vc is not None:
+                        ax.plot(dist, self.vc, color='#17becf', lw=2.5)
+                        ax.set_ylabel(r"$V \ (\mathrm{V})$", color='#17becf')
+                        ax.axhline(0, color='gray', linestyle=':', lw=1.5, alpha=0.7)
+                elif key == 'deriv_vc':
+                    if self.vc is not None:
+                        ax.plot(dist, self.deriv_vc, color='#e377c2', lw=2.5)
+                        ax.set_ylabel(r"$\mathrm{d}V/\mathrm{d}x \ (\mathrm{V/cm})$", color='#e377c2')
+                        ax.axhline(0, color='gray', linestyle=':', lw=1.5, alpha=0.7)
+                elif key == 'r': 
+                    ax.plot(dist, self.resistance, color='#8c564b', lw=2.5)
+                    ax.set_ylabel(r"$R \ (\Omega)$", color='#8c564b')
+                elif key == 'deriv_i':
+                    ax.plot(dist, self.deriv_i, color='#ff7f0e', lw=2.5)
+                    ax.set_ylabel(fr"$\mathrm{{d}}I/\mathrm{{d}}x \ (\mathrm{{nA}}/{unit_tex})$", color='#ff7f0e')
+                    ax.axhline(0, color='gray', linestyle=':', lw=1.5, alpha=0.7)
+                    
+                # Cuadrícula suave al estilo paper
+                ax.grid(True, linestyle='--', alpha=0.4)
+                
+                # Para estética de paper no ocultamos las líneas superior y derecha, 
+                # las dejamos formando una caja cerrada.
+                
+            # Eje X unificado
+            ax_list[-1].set_xlabel(fr"$Distance \ ({unit_tex})$")
+            
+            # Limitar el número de marcas (ticks) en el eje X para que no se apelotonen
+            ax_list[-1].xaxis.set_major_locator(MaxNLocator(nbins=5))
+            
+            self.fig.suptitle(r"$\mathbf{Profile \ Extraction: \ Perpendicular \ " + str(prof_idx) + "}$")
+            self.fig.tight_layout()
+            
+            self._find_ln_i_axis(selected_keys)
+
+    # He sacado la inicialización de menús a una función para no ensuciar el __init__
+    def _setup_toolbars(self):
         toolbar = QToolBar("Export Tools")
         self.addToolBar(toolbar)
         
@@ -81,7 +201,6 @@ class ProfilePlotWindow(QMainWindow):
         csv_action.triggered.connect(self.save_csv)
         toolbar.addAction(csv_action)
         
-        # Barra de herramientas para fitting
         fitting_toolbar = QToolBar("Fitting Tools")
         self.addToolBar(fitting_toolbar)
         
@@ -96,144 +215,18 @@ class ProfilePlotWindow(QMainWindow):
         save_props_action = QAction("Save Properties (.csv)", self)
         save_props_action.triggered.connect(self.save_properties)
         fitting_toolbar.addAction(save_props_action)
-        
-        # Asegurarnos de que axes sea iterable
-        if len(selected_keys) == 1:
-            ax_list = [self.axes]
-        else:
-            ax_list = self.axes
-            
-        # Cálculos de datos
-        self.dist = dist
-        self.sem_norm = (sem - np.min(sem)) / (np.ptp(sem) + 1e-12)
-        self.i = ebic
-        self.abs_i = np.abs(ebic)
-        self.vc = vc # <--- GUARDAMOS LOS DATOS DE VOLTAJE AQUÍ
-        
-        if unit_label == "\u03BCm":
-            dist_um_array = self.dist
-        elif unit_label == "nm":
-            dist_um_array = self.dist * 1e-3
-        elif unit_label == "mm":
-            dist_um_array = self.dist * 1e3
-        else:
-            dist_um_array = self.dist
 
-
-        if len(self.dist) > 1:
-            self.deriv_i = gradient_with_window(dist_um_array, ebic, window=9)
-        else:
-            self.deriv_i = np.zeros_like(self.dist)
-
-        # --- CÁLCULO DE RESISTIVIDAD PUNTO A PUNTO ---
-        # 1. Suavizado y logaritmo para la corriente
-        pos = self.abs_i[self.abs_i > 0]
-        floor = max(np.min(pos) * 0.1, 1e-12) if pos.size > 0 else 1e-12
-        self.ln_i = np.log(np.maximum(self.abs_i, floor))
-        
-        # 2. Derivada de ln(I) (ya lo tenías)
-        if len(dist) > 1: self.deriv = gradient_with_window(dist, self.ln_i, window=9)
-        else: self.deriv = np.zeros_like(self.ln_i)
-
-        if self.vc is not None:
-            # Convertimos I(nA) a Amperios. Usamos un límite inferior (1 fA) para evitar dividir por 0
-            i_amp = np.maximum(self.abs_i, 1e-6) * 1e-9  
-            # R = |V| / |I| (en Ohmios)
-            self.resistance = np.abs(self.vc) / i_amp
-        else:
-            self.resistance = np.zeros_like(self.dist)
-            
-        # 3. Derivada del Voltaje y Resistividad Local
-        if len(dist) > 1 and self.vc is not None:
-            # Factor de escala temporal para derivadas espaciales (asumiendo dist en µm)
-            factor_cm = 1e-4 if unit_label == "\u03BCm" else 1e-7 if unit_label == "nm" else 1e-1
-            dist_cm = self.dist * factor_cm 
-            
-            self.deriv_vc = gradient_with_window(dist_cm, self.vc, window=9)
-            
-            # Conversiones físicas
-            # Prevención de divisiones por cero (limitamos corriente mínima a 1 fA para el cálculo)
-            i_amp = np.maximum(self.abs_i, 1e-6) * 1e-9  
-        else:
-            self.deriv_vc = np.zeros_like(self.dist)
-            self.resistivity = np.zeros_like(self.dist)
-        
-        # Storage for fit results
-        self.properties = None
-        
-        pos = self.abs_i[self.abs_i > 0]
-        floor = max(np.min(pos) * 0.1, 1e-12) if pos.size > 0 else 1e-12
-        self.ln_i = np.log(np.maximum(self.abs_i, floor))
-        
-        if len(dist) > 1:
-            self.deriv = gradient_with_window(dist, self.ln_i, window=9)
-        else:
-            self.deriv = np.zeros_like(self.ln_i)
-            
-        # Dibujar cada gráfico solicitado
-        for idx, key in enumerate(selected_keys):
-            ax = ax_list[idx]
-            if key == 'sem':
-                ax.plot(dist, self.sem_norm, color='#1f77b4', lw=1)
-                ax.set_ylabel(r"SEM norm", color='#1f77b4')
-            elif key == 'i':
-                ax.plot(dist, self.i, color='#9467bd', lw=1)
-                ax.set_ylabel(r"$I$ [nA]", color='#9467bd')
-                ax.axhline(0, color='gray', linestyle=':', lw=0.8, alpha=0.7)
-            elif key == 'abs_i':
-                ax.plot(dist, self.abs_i, color='#d62728', lw=1)
-                ax.set_ylabel(r"$|I|$ [nA]", color='#d62728')
-            elif key == 'ln_i':
-                ax.plot(dist, self.ln_i, color='#ff7f0e', lw=1)
-                ax.set_ylabel(r"$\ln |I|$", color='#ff7f0e')
-            elif key == 'deriv':
-                ax.plot(dist, self.deriv, color='#2ca02c', lw=1)
-                ax.set_ylabel(r"d$\ln(I)$/dx [1/" + unit_label + "]", color='#2ca02c')
-                ax.axhline(0, color='gray', linestyle=':', lw=0.8, alpha=0.7)
-            elif key == 'vc': 
-                if self.vc is not None:
-                    ax.plot(dist, self.vc, color='#17becf', lw=1)
-                    ax.set_ylabel(r"Voltage [V]", color='#17becf')
-                    ax.axhline(0, color='gray', linestyle=':', lw=0.8, alpha=0.7)
-            elif key == 'deriv_vc':
-                if self.vc is not None:
-                    ax.plot(dist, self.deriv_vc, color='#e377c2', lw=1)
-                    ax.set_ylabel(r"d$V$/dx [V/cm]", color='#e377c2')
-                    ax.axhline(0, color='gray', linestyle=':', lw=0.8, alpha=0.7)
-            elif key == 'r': 
-                ax.plot(dist, self.resistance, color='#8c564b', lw=1)
-                ax.set_ylabel(r"Resistance [$\Omega$]", color='#8c564b')
-            elif key == 'deriv_i':
-                ax.plot(dist, self.deriv_i, color='#ff7f0e', lw=1)
-                ax.set_ylabel(r"d$I$/dx [nA/" + unit_label + "]", color='#ff7f0e')
-                ax.axhline(0, color='gray', linestyle=':', lw=0.8, alpha=0.7)
-                
-            # Grid más sutil, tipo paper
-            ax.grid(True, linestyle=':', linewidth=0.6, alpha=0.6)
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
-            
-        ax_list[-1].set_xlabel(f"Distance ({unit_label})")
-        self.fig.suptitle(f"Profile Extraction: Perpendicular {prof_idx}", fontsize=13)
-        self.fig.tight_layout()
-        
-        # Find and store the ln_i axis for plotting fits
-        self._find_ln_i_axis(selected_keys)
-        
     def save_plot(self):
         path, _ = QFileDialog.getSaveFileName(self, "Save Plot", f"Perpendicular_{self.windowTitle().split()[1]}.png", "PNG (*.png)")
         if path: self.fig.savefig(path, dpi=300, bbox_inches='tight')
         
-    
     def save_csv(self):
         path, _ = QFileDialog.getSaveFileName(self, "Save CSV", f"Perpendicular_{self.windowTitle().split()[1]}.csv", "CSV (*.csv)")
         if path:
-            # --- HEADER MODIFICADO ---
             header = "Distance,SEM_norm,I_raw,abs_I,ln_abs_I,deriv_ln_I,Voltage_V,dV_dx_V_cm,Resistance_Ohm"
             vc_data = self.vc if self.vc is not None else np.full_like(self.dist, np.nan)
             deriv_vc_data = self.deriv_vc if hasattr(self, 'deriv_vc') else np.full_like(self.dist, np.nan)
             
-            # --- DATA STACK MODIFICADO ---
             data = np.column_stack([self.dist, self.sem_norm, self.i, self.abs_i, 
                                     self.ln_i, self.deriv, vc_data, deriv_vc_data, self.resistance])
             np.savetxt(path, data, delimiter=',', header=header, comments='', fmt='%.6e')
@@ -602,6 +595,18 @@ class ProfileManager:
 class EBIC3DWindow(QMainWindow):
     def __init__(self, ebic_data, cmap_name, width_phys, height_phys, unit_label, title_params, vmin=None, vmax=None):
         super().__init__()
+
+        # --- APLICAR ESTILO AQUÍ ---
+        plt.rcParams.update({
+            'font.family': 'serif',
+            'mathtext.fontset': 'cm',
+            'axes.labelsize': 20,    # Ajustado a 20 para que no sea excesivo en una ventana de 900x800
+            'xtick.labelsize': 14,   # Ajustado para mejor legibilidad en UI
+            'ytick.labelsize': 14,
+            'axes.titlesize': 16
+        })
+        # ---------------------------
+
         self.setWindowTitle("3D EBIC Surface Map")
         self.resize(900, 800)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
@@ -728,8 +733,8 @@ class EBIC3DWindow(QMainWindow):
 
         self.cbar.set_label(r"Current [$nA$]")
 
-        self.ax.set_xlabel(rf"X Distance [${unit_label}$]", labelpad=10)
-        self.ax.set_ylabel(rf"Y Distance [${unit_label}$]", labelpad=10)
+        self.ax.set_xlabel(rf"x [${unit_label}$]", labelpad=10)
+        self.ax.set_ylabel(rf"y [${unit_label}$]", labelpad=10)
         self.ax.set_zlabel(r"Current [$nA$]", labelpad=10)
 
         self.ax.set_title(rf"3D EBIC Surface Representation" + "\n" + title_params, fontsize=12, pad=20)

@@ -2,9 +2,25 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import glob
 import os
-import numpy as np # Importante para el ajuste lineal
+import numpy as np
 
-# 1. Path configuration
+# ==========================================
+# 0. PLOT SETTINGS (LATEX STYLE & HUGE SIZES)
+# ==========================================
+plt.rcParams.update({
+    'font.family': 'serif',
+    'mathtext.fontset': 'cm',  # Computer Modern (LaTeX look)
+    # 'text.usetex': True,     # <-- UNCOMMENT THIS IF YOU HAVE MIKTEX/TEXLIVE INSTALLED
+    'axes.labelsize': 28,      # Huge axis labels
+    'xtick.labelsize': 20,     # Huge X numbers
+    'ytick.labelsize': 20,     # Huge Y numbers
+    'legend.fontsize': 16,     # Tamaño ajustado para la leyenda
+    'legend.title_fontsize': 18 # Tamaño para el título de la leyenda
+})
+
+# ==========================================
+# 1. METADATA EXTRACTION / DATA PROCESSING
+# ==========================================
 path = './*.csv' 
 files = glob.glob(path)
 
@@ -17,9 +33,6 @@ results = [] # Para guardar d y R
 for file in files:
     try:
         filename = os.path.basename(file)
-        # Ajustado para tu nomenclatura: OXF008_S29_L_IV_devNW{n}G{d}.csv
-        # Si el nombre es solo el número, d_value = float(d_str) funciona.
-        # Si no, usamos una extracción rápida:
         d_str = filename.split('G')[-1].replace('.csv', '')
         d_value = float(d_str)
 
@@ -34,8 +47,7 @@ for file in files:
         df = df.dropna()
 
         # --- CÁLCULO DE RESISTENCIA ---
-        # polyfit(x, y, grado 1) -> y = mx + c. Aquí I = m*V + c
-        # La pendiente m es la conductancia (1/R)
+        # El cálculo se hace con los datos originales (Amperios) para que la R sea correcta
         slope, intercept = np.polyfit(df['V'], df['I'], 1)
         resistance = 1 / slope
         
@@ -45,29 +57,38 @@ for file in files:
     except Exception as e:
         print(f"Error processing {filename}: {e}")
 
-# Ordenar de menor a mayor d para la tabla
 results.sort(key=lambda x: x['d'])
 
-# Imprimir resultados para tu tabla de LaTeX
 print("\n--- Resultados para la tabla ---")
 print(f"{'d (um)':<10} | {'R (Ohm)':<20}")
 print("-" * 35)
 for res in results:
     print(f"{res['d']:<10} | {res['R']:<20.2f}")
 
-# 3. Plotting
-plt.figure(figsize=(10, 6))
+# ==========================================
+# 2. PLOTTING
+# ==========================================
+plt.figure(figsize=(9, 6))
 
-# Ordenar para el plot (opcional, aquí de mayor a menor como tenías)
+# Ordenar de mayor a menor para el plot
 plot_data.sort(key=lambda x: x[0], reverse=True)
 
 for d, df, r in plot_data:
-    plt.plot(df['V'], df['I'], label=f'{d} µm ($R = {r/1e3:.1f}\ k\Omega$)')
+    label_str = fr'${d} \ \mu\mathrm{{m}} \ (R = {r/1e3:.1f} \ \mathrm{{k}}\Omega)$'
+    
+    # Multiplicamos la corriente por 1e6 para mostrarla en microamperios
+    plt.plot(df['V'], df['I'] * 1e6, linewidth=2.5, label=label_str)
 
-plt.title('I-V Characteristic Curves - InAs NWs')
-plt.xlabel('Voltage (V)')
-plt.ylabel('Current (A)')
-plt.grid(True, which='both', linestyle='--', alpha=0.5)
-plt.legend(title="Antenna Gap (d)", loc='best')
+# Ejes con formato MathText estricto (etiqueta Y actualizada a microamperios)
+plt.xlabel(r'$V \ (\mathrm{V})$')
+plt.ylabel(r'$I \ (\mu\mathrm{A})$')
+
+# Reducir el número de valores/marcas en el eje X
+plt.locator_params(axis='x', nbins=5)
+
+# Cuadrícula y layout
+plt.grid(True, linestyle='--', alpha=0.4)
+plt.legend(title=r"$\mathbf{Antenna \ Gap \ (d)}$", loc='best')
 plt.tight_layout()
+
 plt.show()

@@ -22,6 +22,7 @@ from junction_analyzer import JunctionAnalyzer
 from profile_manager import ProfileManager, ProfilePlotWindow, EBIC3DWindow
 from detect_NWs import NWDetector
 import matplotlib.pyplot as plt
+from matplotlib.widgets import RectangleSelector
 
 class CorrelationGui(QMainWindow):
     def __init__(self):
@@ -470,9 +471,15 @@ class CorrelationGui(QMainWindow):
         self.btn_3d_map.setStyleSheet("QPushButton { font-weight: bold; background-color: #e2e3e5; padding: 6px; margin-top: 5px; }")
         self.btn_3d_map.clicked.connect(self.action_show_3d_ebic)
 
+        self.btn_zero = self.create_tool_button("0A", "Set Zero Current (Draw Box)")
+        self.btn_zero.setCheckable(True)
+        self.btn_zero.setStyleSheet("QPushButton { font-weight: bold; color: blue; background-color: #e2e3e5; padding: 6px; }")
+        self.btn_zero.clicked.connect(lambda: self.set_mode("zero_cal"))
+
         self.tool_group = QButtonGroup(self)
         self.tool_group.addButton(self.btn_pan)
         self.tool_group.addButton(self.btn_line)
+        self.tool_group.addButton(self.btn_zero)
 
         self.tools_layout.addWidget(self.btn_home)
         self.tools_layout.addWidget(self.btn_pan)
@@ -481,6 +488,7 @@ class CorrelationGui(QMainWindow):
         self.tools_layout.addSpacing(20)
         self.tools_layout.addWidget(self.btn_overlay)
         self.tools_layout.addWidget(self.btn_3d_map)
+        self.tools_layout.addWidget(self.btn_zero)
         self.tools_layout.addStretch() 
 
         self.main_layout.addWidget(self.left_panel)
@@ -935,8 +943,9 @@ class CorrelationGui(QMainWindow):
         self.lbl_frame_info.setText("Frame: - / -")
 
         # --- NUEVO: Resetear el texto extendido ---
+        # --- NUEVO: Resetear el texto extendido ---
         if hasattr(self, 'lbl_sem_params'):
-            self.lbl_sem_params.setText("SEM: - kV  |  WD: - mm  |  Bias: - V  |  Gain: -   |   ")
+            self.lbl_sem_params.setText("SEM: - kV  |  Px: - nm/px  |  WD: - mm  |  Bias: - V  |  Gain: -   |   ")
             
         if hasattr(self, 'lbl_preamp'):
             self.lbl_preamp.setText("  PreAmp Offset: - %")
@@ -982,6 +991,15 @@ class CorrelationGui(QMainWindow):
         success = self.data_manager.load_file(file_path)
         
         if success:
+            # =========================================================
+            # --- NUEVO: CORRECCIÓN DE CALIBRACIÓN DEL TAMAÑO DE PÍXEL ---
+            # Multiplicamos el valor leído por 0.3875 para que TODA la física 
+            # de la aplicación (ejes, scalebar, profiles) se ajuste automáticamente.
+            # =========================================================
+            if hasattr(self.data_manager, 'pixel_size') and self.data_manager.pixel_size > 0:
+                self.data_manager.pixel_size = self.data_manager.pixel_size * 0.3875
+            # =========================================================
+
             # --- Protección contra imágenes RGB (3D) ---
             if self.data_manager.sem_data.ndim == 3:
                 self.data_manager.sem_data = self.data_manager.sem_data[:, :, 0]
@@ -1007,6 +1025,16 @@ class CorrelationGui(QMainWindow):
                 wd_mm = m_data.get('WorkingDistance_mm', 0.0)
                 gain = m_data.get('EffectiveAmpGain', 0.0)
                 
+                px_size_m = self.data_manager.pixel_size if self.data_manager.pixel_size > 0 else 0.0
+                if px_size_m > 0:
+                    px_size_nm = px_size_m * 1e9
+                    if px_size_nm >= 1000:
+                        px_str = f"{px_size_nm / 1000:.2f} µm/px"
+                    else:
+                        px_str = f"{px_size_nm:.2f} nm/px"
+                else:
+                    px_str = "Unknown"
+
                 # --- NUEVA LÓGICA DEL BIAS ---
                 v_bias_raw = m_data.get('BiasVoltage', 0.0)
                 bias_enabled = m_data.get('BiasEnabled', False)
@@ -1019,7 +1047,7 @@ class CorrelationGui(QMainWindow):
                 # Formatear la ganancia en notación científica
                 gain_str = f"{gain:.0e}" if gain > 0 else "Unknown"
                 
-                self.lbl_sem_params.setText(f"SEM: {V_acc_kV:.1f} kV  |  WD: {wd_mm:.1f} mm  |  Bias: {bias_str}  |  Gain: {gain_str}   |   ")
+                self.lbl_sem_params.setText(f"SEM: {V_acc_kV:.1f} kV  |  Px: {px_str}  |  WD: {wd_mm:.1f} mm  |  Bias: {bias_str}  |  Gain: {gain_str}   |   ")
             else:
                 self.lbl_sem_params.setText("SEM: Unknown  |  WD: Unknown  |  Bias: Unknown  |  Gain: Unknown   |   ")
 
@@ -1496,6 +1524,8 @@ class CorrelationGui(QMainWindow):
         if hasattr(self, 'nw_arrows'): self.nw_arrows.clear()
         if hasattr(self, 'nw_texts'): self.nw_texts.clear()
         if hasattr(self, 'detected_nws_data'): self.detected_nws_data.clear()
+
+        if hasattr(self, 'btn_zero'): self.btn_zero.setChecked(False)
         
         # Limpiar variables de arrastre
         self.dragging_nw_idx = None
@@ -1629,6 +1659,16 @@ class CorrelationGui(QMainWindow):
         self.ax.set_xlim(0, self.width_phys)
         self.ax.set_ylim(0, self.height_phys)
         
+        # --- NUEVO: Instanciar la caja de selección 0A ---
+        self.rect_selector = RectangleSelector(
+            self.ax, self.on_rect_select,
+            useblit=True,
+            button=[1],  # Solo reacciona al click izquierdo
+            interactive=False,
+            props=dict(facecolor='blue', edgecolor='white', alpha=0.3, fill=True)
+        )
+        self.rect_selector.set_active(False) # Apagado por defecto
+
         self.draw_scale_bar()
         self.canvas.draw()
 
@@ -2092,15 +2132,72 @@ class CorrelationGui(QMainWindow):
                 self.tool_group.setExclusive(False)
                 self.btn_pan.setChecked(False)
                 self.btn_line.setChecked(False)
+                if hasattr(self, 'btn_zero'): self.btn_zero.setChecked(False) # <- Nuevo
                 self.tool_group.setExclusive(True)
                 self.canvas.setCursor(Qt.CursorShape.ArrowCursor)
             else:
                 self.mode = mode
                 if mode == 'pan': self.canvas.setCursor(Qt.CursorShape.OpenHandCursor)
                 elif mode == 'line': self.canvas.setCursor(Qt.CursorShape.CrossCursor)
-                # --- NUEVO MODO ---
                 elif mode == 'manual_nw': self.canvas.setCursor(Qt.CursorShape.CrossCursor)
+                elif mode == 'zero_cal': self.canvas.setCursor(Qt.CursorShape.CrossCursor) # <- Nuevo
+                
+            # --- NUEVO: Activar/Desactivar el RectangleSelector ---
+            if hasattr(self, 'rect_selector') and self.rect_selector:
+                self.rect_selector.set_active(self.mode == 'zero_cal')
         except Exception as e: print(e)
+
+    def on_rect_select(self, eclick, erelease):
+        """Calcula la media del recuadro seleccionado y la resta al mapa EBIC."""
+        if self.data_manager.current_map is None:
+            QMessageBox.warning(self, "Error", "No EBIC map loaded.")
+            self.set_mode('view')
+            return
+
+        # 1. Coordenadas físicas del recuadro (donde pinchaste y donde soltaste)
+        x1, y1 = eclick.xdata, eclick.ydata
+        x2, y2 = erelease.xdata, erelease.ydata
+        
+        # 2. Convertir a coordenadas de píxeles (índices de la matriz)
+        c1, r1 = self.phys_to_px(x1, y1)
+        c2, r2 = self.phys_to_px(x2, y2)
+        
+        c_min, c_max = int(min(c1, c2)), int(max(c1, c2))
+        r_min, r_max = int(min(r1, r2)), int(max(r1, r2))
+        
+        # 3. Recortar a los límites de la imagen (por si sales del borde)
+        c_min = max(0, c_min)
+        c_max = min(self.img_width, c_max)
+        r_min = max(0, r_min)
+        r_max = min(self.img_height, r_max)
+        
+        if c_max <= c_min or r_max <= r_min:
+            self.set_mode('view')
+            return
+            
+        # 4. Extraer ROI de esa zona y calcular el Error de Offset (Media)
+        roi = self.data_manager.current_map[r_min:r_max, c_min:c_max]
+        offset_val = np.nanmean(roi)
+        
+        # 5. Restar la media a TODA LA MATRIZ (fija el 0)
+        self.data_manager.current_map -= offset_val
+        
+        # 6. Actualizar la capa gráfica y límites de color
+        vmin = np.nanmin(self.data_manager.current_map)
+        vmax = np.nanmax(self.data_manager.current_map)
+        
+        self.layer_ebic.set_data(self.data_manager.current_map)
+        self.layer_ebic.set_clim(vmin, vmax)
+        
+        # 7. Forzar actualización de los números en la barra de color
+        if self.cbar:
+            self.cbar.update_normal(self.layer_ebic)
+        
+        # 8. Volver al modo normal y redibujar la pantalla
+        self.set_mode('view')
+        self.canvas.draw_idle()
+        
+        self.status_bar.showMessage(f"Zero calibration applied. Subtracted {offset_val:.4f} nA from map.", 7000)
 
     def action_detect_nws(self):
         if self.data_manager.current_map is None:
@@ -2396,6 +2493,8 @@ class CorrelationGui(QMainWindow):
         if file_path:
             success = self.sweep_data_manager.load_file(file_path)
             if success:
+                if hasattr(self.sweep_data_manager, 'pixel_size') and self.sweep_data_manager.pixel_size > 0:
+                    self.sweep_data_manager.pixel_size = self.sweep_data_manager.pixel_size * 0.3875
                 # --- NUEVO: Protección contra imágenes RGB (3D) ---
                 if self.sweep_data_manager.sem_data is not None and self.sweep_data_manager.sem_data.ndim == 3:
                     self.sweep_data_manager.sem_data = self.sweep_data_manager.sem_data[:, :, 0]
