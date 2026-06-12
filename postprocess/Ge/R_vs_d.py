@@ -22,7 +22,7 @@ paper_rc = {
 # 1. Preparación de los datos
 # Datos para n = 1 (Rojo)
 d_n1 = [8, 24]
-R_insitu_n1 = [-20,-20] #Not reAL
+R_insitu_n1 = [68.7,137.8] #Not reAL
 R_exsitu_n1 = [60.70, 111.94]
 
 
@@ -61,8 +61,8 @@ with plt.rc_context(paper_rc):
     plt.legend(loc='upper left', frameon=True, edgecolor='black', fancybox=False)
 
     # Opcional: ajustar límites para ver mejor los datos
-    plt.xlim(5, 30)
-    plt.ylim(0, 130)
+    plt.xlim(5, 28)
+    plt.ylim(0, 150)
 
     plt.tight_layout()
     plt.show()

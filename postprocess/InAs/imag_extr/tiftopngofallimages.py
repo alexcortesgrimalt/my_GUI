@@ -10,7 +10,7 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 # ==========================================
 ruta_actual = os.path.dirname(os.path.abspath(__file__))
 # Cambia '../../' según la posición de image_handler.py
-ruta_objetivo = os.path.abspath(os.path.join(ruta_actual, "../../"))
+ruta_objetivo = os.path.abspath(os.path.join(ruta_actual, "../../../"))
 
 if ruta_objetivo not in sys.path:
     sys.path.insert(0, ruta_objetivo)
@@ -65,24 +65,7 @@ def export_ebic_batch_clean_white(folder_path, cmap_name='plasma'):
                 # Dibujar mapa de corriente
                 im = ax.imshow(data, cmap=cmap_name, vmin=local_min, vmax=local_max, aspect='auto')
                 
-                # --- COLORBAR: ANCHO 90% Y POSICIÓN SUPERIOR ---
-                # width="90%" hace que llegue casi de lado a lado
-                # borderpad=1.5 ajusta la distancia al borde superior
-                cax = inset_axes(ax, width="90%", height="3%", loc='upper center', borderpad=1.5)
-                cb = fig.colorbar(im, cax=cax, orientation='horizontal')
                 
-                # --- ESTILIZACIÓN BLANCO PURO ---
-                # Quitamos path_effects para que no haya bordes negros
-                cb.set_label(r"Current [$nA$]", color='white', fontsize=26, labelpad=5)
-                cb.ax.tick_params(colors='white', labelsize=26, length=4)
-                
-                # Forzar color de los números (ticks)
-                for label in cb.ax.xaxis.get_ticklabels():
-                    label.set_color('white')
-                
-                # Borde de la cajita de la barra en blanco
-                cb.outline.set_edgecolor('white')
-                cb.outline.set_linewidth(1)
 
                 # Guardar PNG
                 plt.savefig(out_name, format='png', dpi=300)

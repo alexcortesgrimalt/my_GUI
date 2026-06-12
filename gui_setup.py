@@ -27,7 +27,7 @@ from matplotlib.widgets import RectangleSelector
 class CorrelationGui(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Map Operations Master")
+        self.setWindowTitle("EBICAT")
         self.resize(1400, 900)
 
         # --- DATA MANAGER ---
@@ -544,16 +544,6 @@ class CorrelationGui(QMainWindow):
         vis_layout.addWidget(lbl_props)
         vis_layout.addSpacing(15)
 
-        # --- NUEVO: Selector de Overlay ---
-        lbl_overlay_type = QLabel("Overlay Mode:")
-        self.combo_overlay = QComboBox()
-        self.combo_overlay.addItems(["EBIC (Current)", "Voltage Contrast"])
-        self.combo_overlay.currentTextChanged.connect(self.toggle_overlay)
-        vis_layout.addWidget(lbl_overlay_type)
-        vis_layout.addWidget(self.combo_overlay)
-        vis_layout.addSpacing(15)
-        # ---------------------------------
-
         lbl_cmap = QLabel("Color Palette:")
         self.combo_cmap = QComboBox()
         self.combo_cmap.addItems(self.colormaps)
@@ -846,15 +836,15 @@ class CorrelationGui(QMainWindow):
         col1_nw.addWidget(self.chk_nw_sem)
         col1_nw.addWidget(self.chk_nw_i)
         col1_nw.addWidget(self.chk_nw_deriv_i)
-        col1_nw.addWidget(self.chk_nw_r)
+        #col1_nw.addWidget(self.chk_nw_r)
 
         col2_nw = QVBoxLayout()
         self.chk_nw_vc = QCheckBox("Voltage (V)")
         self.chk_nw_deriv_vc = QCheckBox("dV / dx")
         self.chk_nw_abs_i = QCheckBox("abs(I)")
         self.chk_nw_deriv = QCheckBox("d ln(I)/dx")
-        col2_nw.addWidget(self.chk_nw_vc)
-        col2_nw.addWidget(self.chk_nw_deriv_vc)
+        #col2_nw.addWidget(self.chk_nw_vc)
+        #col2_nw.addWidget(self.chk_nw_deriv_vc)
         col2_nw.addWidget(self.chk_nw_abs_i)
         col2_nw.addWidget(self.chk_nw_deriv)
 
@@ -866,9 +856,9 @@ class CorrelationGui(QMainWindow):
         self.chk_nw_sem.setChecked(False)
         self.chk_nw_i.setChecked(True)
         self.chk_nw_deriv_i.setChecked(False) 
-        self.chk_nw_r.setChecked(True)
-        self.chk_nw_vc.setChecked(True)
-        self.chk_nw_deriv_vc.setChecked(True)
+        self.chk_nw_r.setChecked(False)
+        self.chk_nw_vc.setChecked(False)
+        self.chk_nw_deriv_vc.setChecked(False)
         self.chk_nw_abs_i.setChecked(False)
         self.chk_nw_deriv.setChecked(False)
         # =========================================================
@@ -921,9 +911,7 @@ class CorrelationGui(QMainWindow):
         self.ax.axis('off') 
         
         instructions_text = (
-            "Welcome to Map Operations Master\n\n"
-            "This software correlates scanning electron microscopy (SEM) images\n"
-            "with EBIC current measurements, allowing to carry out many map operations!.\n\n"
+            "Welcome to EBIC Analysis Tool!\n\n"
             "LOAD INSTRUCTIONS:\n"
             "Please load a multi-page .tif file containing:\n"
             "  • 1st Image: SEM topography image.\n"
@@ -1314,10 +1302,8 @@ class CorrelationGui(QMainWindow):
 
         original_title = self.ax.get_title()
         original_cbar_vis = self.cbar.ax.get_visible() if self.cbar else False
-        original_cbar_v_vis = getattr(self, 'cbar_voltage', None) and self.cbar_voltage.ax.get_visible()
 
         if self.cbar: self.cbar.ax.set_visible(False)
-        if getattr(self, 'cbar_voltage', None): self.cbar_voltage.ax.set_visible(False)
 
         # Configuración base de la fuente LaTeX
         paper_rc = {
@@ -1376,15 +1362,9 @@ class CorrelationGui(QMainWindow):
             # Preparar datos de la barra
             active_im = None
             label_text = ""
-            if self.show_overlay:
-                mode_ui = getattr(self, 'combo_overlay', None)
-                active_mode = mode_ui.currentText() if mode_ui else "EBIC (Current)"
-                if active_mode == "EBIC (Current)" and self.layer_ebic:
-                    active_im = self.layer_ebic
-                    label_text = r"Current [$nA$]"
-                elif active_mode == "Voltage Contrast" and getattr(self, 'layer_voltage', None):
-                    active_im = self.layer_voltage
-                    label_text = r"Voltage [$V$]"
+            if self.show_overlay and self.layer_ebic:
+                active_im = self.layer_ebic
+                label_text = r"Current [$nA$]"
 
             # Lógica de Colorbar (90% de ancho/alto)
             temp_cbar = None
@@ -1460,7 +1440,7 @@ class CorrelationGui(QMainWindow):
             for label in self.ax.get_xticklabels() + self.ax.get_yticklabels():
                 label.set_fontfamily('sans-serif')
 
-            # Restauramos el texto original de la escala (con el símbolo unicode normal)
+            # Restauramos el texto original de la escala
             if self.scale_bar_text and original_sb_text is not None:
                 self.scale_bar_text.set_text(original_sb_text)
                 self.scale_bar_text.set_fontsize(original_sb_fontsize)
@@ -1468,22 +1448,21 @@ class CorrelationGui(QMainWindow):
             if self.scale_bar_line and original_sb_lw:
                 self.scale_bar_line.set_linewidth(original_sb_lw)
 
-            # Borramos la barra de color (que a su vez borra el cax)
+            # Borramos la barra de color temporal
             if temp_cbar: 
                 try: temp_cbar.remove()
                 except Exception: pass
             
-            # Por si acaso Matplotlib no borró el cax, intentamos borrarlo con cuidado
             if cax: 
                 try: cax.remove()
                 except Exception: pass
 
             if self.cbar and original_cbar_vis: self.cbar.ax.set_visible(True)
-            if getattr(self, 'cbar_voltage', None) and original_cbar_v_vis: self.cbar_voltage.ax.set_visible(True)
 
             self.canvas.draw_idle()
 
         self.status_bar.showMessage(f"Paper Figure saved successfully to: {file_path}", 6000)
+
     # --------------------------------------------------------
     def reset_entire_state(self):
         self.layer_sem = None
@@ -1493,11 +1472,6 @@ class CorrelationGui(QMainWindow):
             try: self.cbar.remove()
             except: pass
             self.cbar = None
-
-        if getattr(self, 'cbar_voltage', None):
-            try: self.cbar_voltage.remove()
-            except: pass
-            self.cbar_voltage = None
 
         self.stored_lines = []
         self.current_line_artist = None
@@ -1547,7 +1521,7 @@ class CorrelationGui(QMainWindow):
         self.slider_opacity.blockSignals(True)
         self.slider_opacity.setValue(50)
         self.slider_opacity.blockSignals(False)
-        self.lbl_opacity.setText("EBIC Weight: 50%")
+        self.lbl_opacity.setText("Overlay Intensity: 50%")
         
         self.btn_overlay.blockSignals(True)
         self.btn_overlay.setChecked(False)
@@ -1573,7 +1547,7 @@ class CorrelationGui(QMainWindow):
         self.lbl_sweep_preview.setText("No image preview")
 
         self.current_filename = None
-        self.setWindowTitle("Map Operations Master")
+        self.setWindowTitle("EBICAT")
 
         self.show_placeholder()
 
@@ -1632,22 +1606,6 @@ class CorrelationGui(QMainWindow):
             self.cbar.set_label('Current (nA)', rotation=270, labelpad=15)
             self.layer_ebic.set_visible(False)
             self.cbar.ax.set_visible(False)
-
-        self.layer_voltage = None
-        self.cbar_voltage = None
-
-        if hasattr(self.data_manager, 'voltage_map') and self.data_manager.voltage_map is not None:
-            data_vc = self.data_manager.voltage_map
-            vmin_vc = np.nanmin(data_vc)
-            vmax_vc = np.nanmax(data_vc)
-            
-            self.layer_voltage = self.ax.imshow(data_vc, cmap=self.current_cmap, alpha=self.opacity, 
-                                                 interpolation='nearest', aspect='equal', extent=extent_physical,
-                                                 vmin=vmin_vc, vmax=vmax_vc)
-            self.cbar_voltage = self.fig.colorbar(self.layer_voltage, ax=self.ax, fraction=0.046, pad=0.04)
-            self.cbar_voltage.set_label('Voltage (V)', rotation=270, labelpad=15)
-            self.layer_voltage.set_visible(False)
-            self.cbar_voltage.ax.set_visible(False)
         
         self.ax.set_xlabel(f"Distance ({self.unit_label})")
         self.ax.set_ylabel(f"Distance ({self.unit_label})")
@@ -1892,9 +1850,9 @@ class CorrelationGui(QMainWindow):
             vbox.addWidget(cb_abs)
             vbox.addWidget(cb_ln)
             vbox.addWidget(cb_deriv)
-            vbox.addWidget(cb_vc)
-            vbox.addWidget(cb_deriv_vc)   # <--- AÑADIDO
-            vbox.addWidget(cb_r)          # <--- AÑADIDO
+            #vbox.addWidget(cb_vc)
+            #vbox.addWidget(cb_deriv_vc)   # <--- AÑADIDO
+            #vbox.addWidget(cb_r)          # <--- AÑADIDO
             
             self.scroll_layout.addWidget(gb)
             
@@ -2023,31 +1981,21 @@ class CorrelationGui(QMainWindow):
 
     def toggle_overlay(self, _=None):
         self.show_overlay = self.btn_overlay.isChecked()
-        mode = getattr(self, 'combo_overlay', None)
-        active_mode = mode.currentText() if mode else "EBIC (Current)"
         
-        # 1. Apagar ambas capas gráficamente por defecto
+        # 1. Apagar la capa por defecto
         if self.layer_ebic:
             self.layer_ebic.set_visible(False)
             if self.cbar: self.cbar.ax.set_visible(False)
-        if getattr(self, 'layer_voltage', None):
-            self.layer_voltage.set_visible(False)
-            if self.cbar_voltage: self.cbar_voltage.ax.set_visible(False)
             
-        # 2. Encender la seleccionada si el botón global está activado
+        # 2. Encender si el botón global está activado
         overlay_str = ""
         if self.show_overlay:
             op_str = f"Op: {int(self.opacity*100)}%"
             
-            if active_mode == "EBIC (Current)" and self.layer_ebic:
+            if self.layer_ebic:
                 self.layer_ebic.set_visible(True)
                 if self.cbar: self.cbar.ax.set_visible(True)
                 overlay_str = f" + EBIC Overlay ({op_str})"
-                
-            elif active_mode == "Voltage Contrast" and getattr(self, 'layer_voltage', None):
-                self.layer_voltage.set_visible(True)
-                if self.cbar_voltage: self.cbar_voltage.ax.set_visible(True)
-                overlay_str = f" + Voltage Contrast Overlay ({op_str})"
 
         # 3. Presentación de parámetros en juego
         file_str = f" | {self.current_filename}" if hasattr(self, 'current_filename') and self.current_filename else ""
@@ -2066,12 +2014,10 @@ class CorrelationGui(QMainWindow):
         if self.layer_ebic:
             self.layer_ebic.set_alpha(self.opacity)
             self.layer_ebic.set_cmap(cmap_name)
-        if getattr(self, 'layer_voltage', None):
-            self.layer_voltage.set_alpha(self.opacity)
-            self.layer_voltage.set_cmap(cmap_name)
             
         # Llamar al toggle actualiza el título forzosamente con el nuevo valor %
         self.toggle_overlay()
+
 
     def action_show_3d_ebic(self):
         """Genera y muestra un mapa de superficie 3D del EBIC actual."""
